@@ -198,9 +198,9 @@ const EP = [
     okc:202, ok:{status:"accepted"}, errc:400, err:ERR("bad_request","unknown clientOrderId")}],
   ["Trading","POST","/orders/cancelAll","Cancel all orders for a symbol",{b:'{"connectionId":"a1b2c3","exchange":"BinanceSpot","symbol":"BTCUSDT"}',
     okc:202, ok:{status:"accepted"}, errc:403, err:ERR("trading_not_enabled","This connection has not been granted trading via the Local API")}],
-  ["Trading","POST","/panic/cancel-all-orders","PANIC (Del key): cancel ALL orders across the account — connectionId optional (omit = every granted account)",{b:'{"connectionId":"a1b2c3"}',
+  ["Trading","POST","/panic/cancel-all-orders","Cancel all orders across the account — connectionId optional (omit = every granted account)",{b:'{"connectionId":"a1b2c3"}',
     okc:202, ok:{status:"accepted",accounts:2}, errc:403, err:ERR("trading_not_enabled","No granted connection")}],
-  ["Trading","POST","/panic/close-all-positions","PANIC (NumPad0): close ALL positions + cancel across the account",{b:'{"connectionId":"a1b2c3"}',
+  ["Trading","POST","/panic/close-all-positions","Close all positions + cancel across the account",{b:'{"connectionId":"a1b2c3"}',
     okc:202, ok:{status:"accepted",accounts:2}, errc:403, err:ERR("trading_not_enabled","No granted connection")}],
 
   ["App bridge","POST","/app/open-symbol","Open a symbol's orderbook in the terminal",{b:'{"exchange":"BinanceSpot","symbol":"BTCUSDT"}',
