@@ -1,0 +1,15 @@
+# JS
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+*.egg-info/
+
+# .NET
+bin/
+obj/
