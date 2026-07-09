@@ -127,9 +127,9 @@ const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[
 const LS=k=>{try{return localStorage.getItem(k)||"";}catch{return"";}};
 const SS=(k,v)=>{try{localStorage.setItem(k,v);}catch{}};
 
-// ── theme (default LIGHT; persisted in this browser) ──
+// ── theme (default DARK; persisted in this browser) ──
 function applyTheme(t){document.documentElement.dataset.theme=t; const b=$("#theme-toggle"); if(b) b.textContent = t==="dark" ? "☀️ Light" : "🌙 Dark";}
-applyTheme(LS("colibri_theme")==="dark" ? "dark" : "light");
+applyTheme(LS("colibri_theme")==="light" ? "light" : "dark");
 $("#theme-toggle").onclick=()=>{const next=document.documentElement.dataset.theme==="dark"?"light":"dark"; SS("colibri_theme",next); applyTheme(next);};
 
 $("#cfg-host").value = LS("colibri_host") || "127.0.0.1";
