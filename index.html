@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Colibri API</title>
+<!--COLIBRI_BOOTSTRAP-->
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#232a34;--fg:#c9d1d9;--dim:#7d8590;--green:#3fb950;--red:#f85149;--amber:#d29922;--accent:#58a6ff;--chip:#21262d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:13.5px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header h1 b{color:var(--accent)}
+  .status{margin-left:auto;font-size:12px;color:var(--dim)}
+  .status.ok{color:var(--green)}.status.bad{color:var(--red)}
+  main{max-width:940px;margin:0 auto;padding:18px 20px 60px}
+  .conn{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
+  .conn .field{display:flex;flex-direction:column;gap:3px}
+  .conn label{font-size:11px;color:var(--dim)}
+  .hint{color:var(--dim);font-size:12px;margin:6px 0 16px}
+  .hint code{background:var(--chip);padding:1px 6px;border-radius:5px;color:var(--fg)}
+  .group{margin:22px 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .ep{background:var(--panel);border:1px solid var(--line);border-radius:8px;margin-bottom:8px;overflow:hidden}
+  .ep-head{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none}
+  .ep-head:hover{background:#1b2129}
+  .m{font-weight:700;font-size:11px;padding:2px 8px;border-radius:5px;min-width:52px;text-align:center}
+  .m.GET{background:#132e1a;color:var(--green)}
+  .m.POST{background:#132538;color:var(--accent)}
+  .m.PUT{background:#2e2713;color:var(--amber)}
+  .m.DELETE{background:#2e1515;color:var(--red)}
+  .m.WS{background:#241338;color:#bc8cff}
+  .path{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  .desc{margin-left:auto;color:var(--dim);font-size:12px}
+  .ep-body{display:none;padding:0 14px 14px;border-top:1px solid var(--line)}
+  .ep.open .ep-body{display:block}
+  .fields{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+  .field{display:flex;flex-direction:column;gap:3px}
+  .field label{font-size:11px;color:var(--dim)}
+  input,textarea,select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:6px;font:inherit}
+  input:focus,textarea:focus,select:focus{outline:1px solid var(--accent)}
+  textarea{width:100%;min-height:76px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical}
+  button.send{background:var(--accent);color:#0d1117;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-weight:600}
+  button.ghost{background:var(--chip);color:var(--fg);border:1px solid var(--line);padding:7px 12px;border-radius:6px;cursor:pointer}
+  .resp{margin-top:12px;background:#0d1117;border:1px solid var(--line);border-radius:6px}
+  .resp-head{display:flex;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:12px}
+  .code{font-weight:700}.code.ok{color:var(--green)}.code.err{color:var(--red)}
+  .resp pre{margin:0;padding:10px;overflow:auto;max-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+  .ms{margin-left:auto;color:var(--dim)}
+  .wslog{background:#0d1117;border:1px solid var(--line);border-radius:6px;height:260px;overflow:auto;padding:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;margin-top:10px}
+  .wslog div{padding:1px 0;white-space:pre-wrap}
+  .up{color:var(--green)}.down{color:var(--red)}.dim{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Colibri<b>·</b>API</h1>
+  <div class="status" id="status">enter port + token</div>
+</header>
+<main>
+  <div class="conn">
+    <div class="field"><label>Host</label><input id="cfg-host" value="127.0.0.1" size="12"/></div>
+    <div class="field"><label>Port</label><input id="cfg-port" placeholder="18845" size="8"/></div>
+    <div class="field" style="flex:1;min-width:240px"><label>Access token</label><input id="cfg-token" placeholder="paste from Settings → Program → Local API" style="width:100%"/></div>
+    <button class="send" id="cfg-connect">Connect</button>
+  </div>
+  <p class="hint">Open this file directly, paste the <b>Port</b> + <b>Access token</b> from the terminal
+    (Settings → Program → Local API), and hit <b>Connect</b> — the values are remembered in this browser.
+    The terminal must have <b>“Allow web browser access”</b> ticked (that lets any browser page reach the
+    API; the token still guards it). Then expand an endpoint and hit <b>Send</b>.</p>
+  <div id="list"></div>
+
+  <div class="group">WebSocket · /stream</div>
+  <div class="ep open">
+    <div class="ep-head" onclick="this.parentElement.classList.toggle('open')"><span class="m WS">WS</span><span class="path">/stream</span><span class="desc">subscribe to live channels</span></div>
+    <div class="ep-body">
+      <div class="fields">
+        <div class="field"><label>channel</label><select id="ws-ch">
+          <option>book</option><option>trades</option><option>funding</option>
+          <option>positions</option><option>orders</option><option>balance</option>
+          <option>notifications</option><option>signalLevels</option></select></div>
+        <div class="field"><label>exchange</label><input id="ws-ex" value="BinanceSpot" size="16"/></div>
+        <div class="field"><label>symbol</label><input id="ws-sym" value="BTCUSDT" size="12"/></div>
+        <div class="field"><label>connectionId (account ch.)</label><input id="ws-conn" placeholder="—" size="12"/></div>
+      </div>
+      <button class="send" id="ws-sub">Subscribe</button>
+      <button class="ghost" id="ws-clear">Clear</button>
+      <button class="ghost" id="ws-close">Disconnect</button>
+      <div class="wslog" id="ws-log"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const BOOT = window.__COLIBRI__ || null; // set only when the terminal SERVES this page
+const $=s=>document.querySelector(s), el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;};
+const esc=s=>String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+// ── connection config (host/port/token) — persisted in localStorage; auto-filled when served ──
+const LS=k=>{try{return localStorage.getItem(k)||"";}catch{return"";}};
+const SS=(k,v)=>{try{localStorage.setItem(k,v);}catch{}};
+$("#cfg-host").value = LS("colibri_host") || "127.0.0.1";
+$("#cfg-port").value = (BOOT && location.port) ? location.port : LS("colibri_port");
+$("#cfg-token").value = (BOOT && BOOT.token) ? BOOT.token : LS("colibri_token");
+
+function cfg(){return {host:$("#cfg-host").value.trim()||"127.0.0.1", port:$("#cfg-port").value.trim(), token:$("#cfg-token").value.trim()};}
+function base(){const c=cfg(); return "http://"+c.host+":"+c.port;}
+function wsUrl(){const c=cfg(); return "ws://"+c.host+":"+c.port+"/stream";}
+function authHeader(){const t=cfg().token; return t?{"Authorization":"Bearer "+t}:{};}
+
+async function connect(){
+  const c=cfg(); SS("colibri_host",c.host); SS("colibri_port",c.port); SS("colibri_token",c.token);
+  if(!c.port){$("#status").className="status bad";$("#status").textContent="enter a port";return;}
+  try{const r=await fetch(base()+"/ping"); const j=await r.json();
+    $("#status").className="status ok"; $("#status").textContent=`● ${j.name} ${j.version} · api v${j.apiVersion} · :${c.port}`;}
+  catch(e){$("#status").className="status bad"; $("#status").textContent="unreachable — check port + “Allow web browser access”";}
+}
+$("#cfg-connect").onclick=connect;
+
+// ── endpoint catalogue ──
+const EP = [
+  ["Discovery","GET","/ping","Discover the running instance",{auth:false}],
+
+  ["Market data","GET","/symbols","Symbol universe from the cache",{q:[["exchange","BinanceSpot"]]}],
+  ["Market data","GET","/book/{exchange}/{symbol}","Live orderbook (dual-unit levels)",{p:[["exchange","BinanceSpot"],["symbol","BTCUSDT"]],q:[["depth","50"]]}],
+  ["Market data","GET","/clusters/{exchange}/{symbol}","Raw 1-minute cluster buckets",{p:[["exchange","BinanceSpot"],["symbol","BTCUSDT"]],q:[["limit","10"]]}],
+  ["Market data","GET","/funding/{exchange}/{symbol}","Funding rate + next settlement",{p:[["exchange","BinanceLinearFutures"],["symbol","BTCUSDT"]]}],
+  ["Market data","GET","/orderbook-settings/{exchange}","Effective orderbook settings (exchange tier)",{p:[["exchange","BinanceSpot"]]}],
+  ["Market data","PUT","/orderbook-settings/{exchange}","Patch the exchange orderbook settings",{p:[["exchange","BinanceSpot"]],b:'{"minTradeUsd":1000}'}],
+
+  ["Account","GET","/connections","List configured connections",{}],
+  ["Account","GET","/connections/{id}","One connection by id",{p:[["id",""]]}],
+  ["Account","GET","/positions","Open positions for a connection",{q:[["connectionId",""]]}],
+  ["Account","GET","/orders","Working orders for a connection",{q:[["connectionId",""]]}],
+  ["Account","GET","/balance","Balances for a connection",{q:[["connectionId",""]]}],
+
+  ["Trading","POST","/orders","Place an order (needs a per-connection grant)",{b:'{"connectionId":"","exchange":"BinanceSpot","symbol":"BTCUSDT","side":"Buy","type":"Limit","price":"50000","sizeQuote":"20"}'}],
+  ["Trading","DELETE","/orders/{clientOrderId}","Cancel an order by client id",{p:[["clientOrderId",""]],q:[["connectionId",""],["exchange","BinanceSpot"],["symbol","BTCUSDT"]]}],
+  ["Trading","POST","/orders/cancelAll","Cancel all orders for a symbol",{b:'{"connectionId":"","exchange":"BinanceSpot","symbol":"BTCUSDT"}'}],
+  ["Trading","POST","/panic/cancel-all-orders","PANIC (Del key): cancel ALL orders across the account — connectionId optional (omit = every granted account)",{b:'{"connectionId":""}'}],
+  ["Trading","POST","/panic/close-all-positions","PANIC (NumPad0): close ALL positions + cancel across the account",{b:'{"connectionId":""}'}],
+
+  ["App bridge","POST","/app/open-symbol","Open a symbol's orderbook in the terminal",{b:'{"exchange":"BinanceSpot","symbol":"BTCUSDT"}'}],
+  ["App bridge","POST","/app/open-combo","Combo: the coin across ALL connections (tab or window)",{b:'{"symbol":"BTCUSDT","target":"tab"}'}],
+  ["App bridge","POST","/notifications","Raise a notification (toast) in the terminal",{b:'{"message":"hello from the explorer","severity":"info","source":"Explorer"}'}],
+  ["App bridge","POST","/signals","Post a market signal into the Notifications window (Signals + API tabs)",{b:'{"exchange":"BinanceSpot","symbol":"BTCUSDT","text":"whale wall pulled"}'}],
+
+  ["Signal levels","GET","/signal-levels","List price alerts",{q:[["exchange",""],["symbol",""]]}],
+  ["Signal levels","POST","/signal-levels","Create a price alert",{b:'{"exchange":"BinanceSpot","symbol":"BTCUSDT","price":"70000","direction":"above","oneShot":false}'}],
+  ["Signal levels","DELETE","/signal-levels/{id}","Delete a price alert by id",{p:[["id",""]]}],
+  ["Signal levels","DELETE","/signal-levels","Clear all alerts for a symbol",{q:[["exchange","BinanceSpot"],["symbol","BTCUSDT"]]}],
+];
+
+// ── render endpoint cards ──
+const list=$("#list"); let curGroup="";
+for(const [group,method,path,desc,opt] of EP){
+  if(group!==curGroup){curGroup=group; list.appendChild(el("div","group",group));}
+  const ep=el("div","ep");
+  const head=el("div","ep-head");
+  head.appendChild(el("span","m "+method,method));
+  head.appendChild(el("span","path",path));
+  head.appendChild(el("span","desc",desc));
+  head.onclick=()=>ep.classList.toggle("open");
+  ep.appendChild(head);
+
+  const body=el("div","ep-body");
+  const fields=el("div","fields");
+  const pIn={}, qIn={};
+  (opt.p||[]).forEach(([k,v])=>{const f=el("div","field");f.appendChild(el("label",null,"{"+k+"}"));const i=el("input");i.value=v;i.size=Math.max(10,v.length||12);pIn[k]=i;f.appendChild(i);fields.appendChild(f);});
+  (opt.q||[]).forEach(([k,v])=>{const f=el("div","field");f.appendChild(el("label",null,"?"+k));const i=el("input");i.value=v;i.placeholder=k;i.size=Math.max(10,(v||k).length+2);qIn[k]=i;f.appendChild(i);fields.appendChild(f);});
+  body.appendChild(fields);
+
+  let bodyIn=null;
+  if(opt.b!==undefined){bodyIn=el("textarea");bodyIn.value=opt.b;body.appendChild(bodyIn);}
+
+  const btnRow=el("div"); btnRow.style.marginTop="10px";
+  const send=el("button","send","Send"); btnRow.appendChild(send);
+  body.appendChild(btnRow);
+
+  const resp=el("div","resp"); resp.style.display="none";
+  body.appendChild(resp);
+  ep.appendChild(body);
+  list.appendChild(ep);
+
+  send.onclick=async()=>{
+    if(!cfg().port){resp.style.display="block";resp.innerHTML='<div class="resp-head"><span class="code err">—</span><span class="dim">set the Port + token above and Connect first</span></div>';return;}
+    let url=path;
+    for(const k in pIn) url=url.replace("{"+k+"}",encodeURIComponent(pIn[k].value||""));
+    const qs=Object.entries(qIn).filter(([,i])=>i.value!=="").map(([k,i])=>encodeURIComponent(k)+"="+encodeURIComponent(i.value)).join("&");
+    if(qs)url+="?"+qs;
+    const t0=performance.now();
+    const o={method,headers:{...(opt.auth===false?{}:authHeader())}};
+    if(bodyIn){o.headers["Content-Type"]="application/json";o.body=bodyIn.value;}
+    resp.style.display="block"; resp.innerHTML='<div class="resp-head dim">…</div>';
+    try{
+      const r=await fetch(base()+url,o);
+      const txt=await r.text(); const ms=(performance.now()-t0).toFixed(0);
+      let pretty=txt; try{pretty=JSON.stringify(JSON.parse(txt),null,2);}catch{}
+      const ok=r.status<400;
+      resp.innerHTML=`<div class="resp-head"><span class="code ${ok?'ok':'err'}">${r.status}</span><span class="dim">${method} ${esc(url)}</span><span class="ms">${ms} ms</span></div><pre>${esc(pretty||"(empty)")}</pre>`;
+    }catch(e){
+      resp.innerHTML=`<div class="resp-head"><span class="code err">ERR</span><span class="dim">${esc(e.message)} — is “Allow web browser access” on?</span></div>`;
+    }
+  };
+}
+
+// ── WebSocket explorer ──
+let ws=null;
+const subbed=new Set(); // channels already subscribed on the current socket (avoid duplicate-subscribe errors)
+function wslog(cls,txt){const b=$("#ws-log");const d=el("div",cls,txt);b.prepend(d);while(b.childElementCount>300)b.lastChild.remove();}
+const ACCOUNT=new Set(["positions","orders","balance"]);
+const MARKET=new Set(["book","trades","funding"]);
+
+// Show only the inputs a channel actually uses — account channels key by connectionId (exchange/symbol
+// are ignored), market channels by exchange+symbol, app-wide channels by nothing.
+function syncWsFields(){
+  const ch=$("#ws-ch").value;
+  $("#ws-ex").closest(".field").style.display=MARKET.has(ch)?"":"none";
+  $("#ws-sym").closest(".field").style.display=MARKET.has(ch)?"":"none";
+  $("#ws-conn").closest(".field").style.display=ACCOUNT.has(ch)?"":"none";
+}
+$("#ws-ch").onchange=syncWsFields; syncWsFields();
+
+$("#ws-sub").onclick=()=>{
+  if(!cfg().token){wslog("down","set the token above first");return;}
+  const ch=$("#ws-ch").value;
+  if(!ws||ws.readyState>1){
+    subbed.clear();
+    // Browsers can't set WS request headers, so the token rides the query string — the terminal
+    // accepts ?access_token= on /stream for browser clients (Origin + Host are still checked).
+    try{ws=new WebSocket(wsUrl()+"?access_token="+encodeURIComponent(cfg().token));}
+    catch(e){wslog("down","bad url: "+e.message);return;}
+    ws.onopen=()=>{wslog("up","● connected"); doSub(ch);};
+    ws.onmessage=m=>{let f;try{f=JSON.parse(m.data);}catch{return;} wslog(f.type==="error"?"down":"dim", (f.type||"?")+(f.event?"/"+f.event:"")+"  "+JSON.stringify(f.data||f));};
+    ws.onclose=()=>{subbed.clear(); wslog("down","● disconnected");};
+    ws.onerror=()=>wslog("down","● socket error — check port + “Allow web browser access”");
+  }else{doSub(ch);}
+};
+function doSub(ch){
+  const data={channel:ch};
+  if(ACCOUNT.has(ch)){data.connectionId=$("#ws-conn").value;}
+  else if(MARKET.has(ch)){data.exchange=$("#ws-ex").value;data.symbol=$("#ws-sym").value;}
+  // account/app-wide channels have one subscription each; a market channel is keyed by exchange+symbol.
+  const key=ACCOUNT.has(ch)?ch+"|"+data.connectionId:MARKET.has(ch)?ch+"|"+data.exchange+"|"+data.symbol:ch;
+  if(subbed.has(key)){wslog("dim","already subscribed to "+ch+" — pick another channel or Disconnect first");return;}
+  subbed.add(key);
+  ws.send(JSON.stringify({type:"subscribe",data}));
+  wslog("up","→ subscribe "+ch);
+}
+$("#ws-close").onclick=()=>{if(ws){ws.close();ws=null;}subbed.clear();};
+$("#ws-clear").onclick=()=>{$("#ws-log").innerHTML="";};
+
+// Auto-connect if we already have a port (served, or remembered from last time).
+if(cfg().port) connect();
+</script>
+</body>
+</html>
