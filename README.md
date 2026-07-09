@@ -65,8 +65,22 @@ open a symbol or combo in the terminal, raise a toast, post a market signal, man
 signal levels. Stream: `book`, `trades`, `funding`, `positions`, `orders`, `balance`,
 `notifications`, `signalLevels`.
 
-See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract and each language's
-`examples/` folder for runnable samples.
+See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract.
+
+## Examples
+
+Every endpoint has a runnable example (`js/examples/`, `python/examples/`, and the C# walk-through
+in `dotnet/Colibri.Sdk.Examples`):
+
+| Example | Covers |
+|---|---|
+| `basic-rest` | ping · connections · book |
+| `market-data` | symbols · book · clusters · funding |
+| `account` | connections · positions · orders · balance |
+| `trading` | place · cancel · cancel-all · panic *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
+| `app-and-signals` | open-symbol · open-combo · notify · signal · signal-levels CRUD |
+| `orderbook-stream` / `live-trades` | focused WebSocket streams |
+| `stream-all` | every WS channel at once |
 
 ## Security
 
