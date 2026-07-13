@@ -125,7 +125,7 @@ public sealed class ColibriClient : IDisposable
     public Task CancelAllAsync(string connectionId, string exchange, string symbol, CancellationToken ct = default) =>
         SendAsync<object>(HttpMethod.Post, "/orders/cancelAll", new { connectionId, exchange, symbol }, ct);
 
-    // ── slot control (/app/panels) ───────────────────────────────────────────
+    // ── panel control (/app/panels) ──────────────────────────────────────────
     // A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
     // terminal restart. Add/change/clear are token-gated; a connectionId binds a trading account
     // and needs a per-connection GRANT (like trading).
@@ -169,8 +169,21 @@ public sealed class ColibriClient : IDisposable
         SendAsync<PanelActionResult>(HttpMethod.Delete, $"/app/panels/{Uri.EscapeDataString(slotId)}", null, ct);
 
     // ── app bridge / signals ─────────────────────────────────────────────────
-    public Task OpenSymbolAsync(string exchange, string symbol, CancellationToken ct = default) =>
-        SendAsync<object>(HttpMethod.Post, "/app/open-symbol", new { exchange, symbol }, ct);
+    /// <summary>
+    ///     Open ONE coin in the ACTIVE tab + surface the window — a panel add under the hood (201,
+    ///     returns the created slot). <paramref name="connectionId" /> is grant-gated;
+    ///     <paramref name="views" /> defaults to <c>["orderbook"]</c>.
+    /// </summary>
+    public Task<PanelActionResult> OpenSymbolAsync(string exchange, string symbol, string? connectionId = null, IReadOnlyList<string>? views = null, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Post, "/app/open-symbol", new { exchange, symbol, connectionId, views }, ct);
+
+    /// <summary>Account-wide: cancel every order (regular + triggers) — one account, or every granted one when null.</summary>
+    public Task CancelAllOrdersAsync(string? connectionId = null, CancellationToken ct = default) =>
+        SendAsync<object>(HttpMethod.Post, "/orders/cancel-all-orders", new { connectionId }, ct);
+
+    /// <summary>Account-wide: close every position + cancel leftovers — one account, or every granted one when null.</summary>
+    public Task CloseAllPositionsAsync(string? connectionId = null, CancellationToken ct = default) =>
+        SendAsync<object>(HttpMethod.Post, "/orders/close-all-positions", new { connectionId }, ct);
 
     public Task OpenComboAsync(string symbol, string target = "window", CancellationToken ct = default) =>
         SendAsync<object>(HttpMethod.Post, "/app/open-combo", new { symbol, target }, ct);

@@ -143,26 +143,35 @@ export class ColibriClient {
   cancelAll(connectionId: string, exchange: string, symbol: string): Promise<{ status: string }> {
     return this.req("POST", "/orders/cancelAll", { connectionId, exchange, symbol });
   }
-  /** The global "Del" panic — cancel every order on one (or, if omitted, every granted) account. */
-  panicCancelAllOrders(connectionId?: string): Promise<{ status: string; accounts: number }> {
-    return this.req("POST", "/panic/cancel-all-orders", { connectionId });
+  /** Account-wide: cancel every order on one (or, if omitted, every granted) account — the terminal's Del hotkey. */
+  cancelAllOrders(connectionId?: string): Promise<{ status: string; accounts: number }> {
+    return this.req("POST", "/orders/cancel-all-orders", { connectionId });
   }
-  /** The global "NumPad0" super-panic — flatten every position + cancel, on one or every granted account. */
-  panicCloseAllPositions(connectionId?: string): Promise<{ status: string; accounts: number }> {
-    return this.req("POST", "/panic/close-all-positions", { connectionId });
+  /** Account-wide: flatten every position + cancel leftovers, on one or every granted account — the NumPad0 hotkey. */
+  closeAllPositions(connectionId?: string): Promise<{ status: string; accounts: number }> {
+    return this.req("POST", "/orders/close-all-positions", { connectionId });
   }
 
   // ── app bridge ───────────────────────────────────────────────────────────
-  /** Open ONE coin on its venue in the terminal (the "see the move → open the book" gesture). */
-  openSymbol(exchange: string, symbol: string): Promise<{ opened: boolean }> {
-    return this.req("POST", "/app/open-symbol", { exchange, symbol });
+  /**
+   * Open ONE coin in the ACTIVE tab + surface the window (the "see the move → open the book"
+   * gesture). A panel add under the hood — same optional `connectionId` (grant-gated) / `views`
+   * (default `["orderbook"]`) semantics — answering 201 with the created slot, so the tool can
+   * keep driving it by its durable id.
+   */
+  openSymbol(
+    exchange: string,
+    symbol: string,
+    opts: { connectionId?: string; views?: ("orderbook" | "chart")[] } = {},
+  ): Promise<PanelActionResult> {
+    return this.req("POST", "/app/open-symbol", { exchange, symbol, ...opts });
   }
   /** Open the coin as a COMBO — one panel per connection that lists it. `target`: "tab" | "window". */
   openCombo(symbol: string, target: "tab" | "window" = "window"): Promise<{ opened: boolean }> {
     return this.req("POST", "/app/open-combo", { symbol, target });
   }
 
-  // ── slot control (/app/panels) ────────────────────────────────────────────
+  // ── panel control (/app/panels) ───────────────────────────────────────────
   // A SLOT is the durable box — its GUID `slotId` survives an instrument change, a clear, and a
   // terminal restart, so a tool can drive the same box forever. Add/change/clear are token-gated;
   // a `connectionId` in a body binds a trading account and needs a per-connection GRANT.

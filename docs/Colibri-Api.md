@@ -81,8 +81,8 @@ so `/stream` also accepts `?access_token=<token>`.
 | POST | `/orders` | `{connectionId, exchange, symbol, side, type, price?, sizeQuote?, sizeBase?, reduceOnly?}` → `202 {clientOrderId, status}`. Lifecycle arrives on the WS `orders` channel. |
 | DELETE | `/orders/{clientOrderId}?connectionId=` | cancel one |
 | POST | `/orders/cancelAll` | `{connectionId, exchange, symbol}` |
-| POST | `/panic/cancel-all-orders` | `{connectionId?}` — Del key; omit id → every granted account |
-| POST | `/panic/close-all-positions` | `{connectionId?}` — NumPad0 super-panic |
+| POST | `/orders/cancel-all-orders` | `{connectionId?}` — account-wide: cancel every order, regular + triggers (the terminal's Del hotkey); omit id → every granted account |
+| POST | `/orders/close-all-positions` | `{connectionId?}` — account-wide: close every position + cancel leftovers (the NumPad0 hotkey) |
 
 `side` = `BUY`/`SELL`, `type` = `LIMIT`/`MARKET`. Give **either** `sizeQuote` (spend N quote) **or**
 `sizeBase` (N coins). `price` only for `LIMIT`. `reduceOnly` closes a position.
@@ -90,12 +90,12 @@ so `/stream` also accepts `?access_token=<token>`.
 ### App bridge & signals
 | Method | Path | Body |
 |---|---|---|
-| POST | `/app/open-symbol` | `{exchange, symbol}` — open one coin in the terminal |
+| POST | `/app/open-symbol` | `{exchange, symbol, connectionId?, views?}` — open one coin in the ACTIVE tab + surface the window. A **panel add** (same `connectionId`/`views` semantics as panel `content`, views default `["orderbook"]`) → `201 {status:"opened", panel}` with the created slot |
 | POST | `/app/open-combo` | `{symbol, target}` — fan across every connection (`target`: `tab`\|`window`) |
 | POST | `/notifications` | `{message, severity?, source?}` — raise a toast |
 | POST | `/signals` | `{exchange, symbol, text}` — post into Notifications → API tab |
 
-### Slot control — drive the terminal's panels by a durable id
+### Panel control — drive the terminal's panels by a durable id
 
 A **slot** is the durable box in the terminal's grid — addressed by a GUID `slotId` that survives an
 **instrument change**, a **clear**, a **view/kind transition**, and a terminal **restart**, so a tool
@@ -107,7 +107,7 @@ for the `POST` add-target.
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/app/panels` | `?tabId=<uuid>` `?windowIndex=N` (optional scoping). → `{windows: [{index, tabs: [{uuid, index, slots: [{slotId, kind, empty, exchange?, symbol?, contentId?, connectionId?, viewOnly, chart?}]}]}]}` |
-| POST | `/app/panels` | `{tabId?, content?}` — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first for an orderbook add). `content` null/absent adds an **empty "+" box** instead — reserve now, fill later by its durable id via PUT |
+| POST | `/app/panels` | `{tabId?, content?}` → **201** — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first for an orderbook add). `content` null/absent adds an **empty "+" box** instead — reserve now, fill later by its durable id via PUT |
 | PUT | `/app/panels/{slotId}` | `{content?}` — **idempotent** desired-state set: change the instrument, switch views (**kind transitions ok** — an orderbook box can become a chart box and back), bind an account; `content` null/absent **clears** (the box stays, same id) |
 | DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
 

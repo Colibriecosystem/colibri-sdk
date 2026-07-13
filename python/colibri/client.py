@@ -126,20 +126,25 @@ class ColibriClient:
     def cancel_all(self, connection_id: str, exchange: str, symbol: str) -> dict:
         return self._req("POST", "/orders/cancelAll", {"connectionId": connection_id, "exchange": exchange, "symbol": symbol})
 
-    def panic_cancel_all_orders(self, connection_id: str | None = None) -> dict:
-        return self._req("POST", "/panic/cancel-all-orders", {"connectionId": connection_id})
+    def cancel_all_orders(self, connection_id: str | None = None) -> dict:
+        """Account-wide: cancel every order (regular + triggers) — one account, or every granted one when omitted."""
+        return self._req("POST", "/orders/cancel-all-orders", {"connectionId": connection_id})
 
-    def panic_close_all_positions(self, connection_id: str | None = None) -> dict:
-        return self._req("POST", "/panic/close-all-positions", {"connectionId": connection_id})
+    def close_all_positions(self, connection_id: str | None = None) -> dict:
+        """Account-wide: close every position + cancel leftovers — one account, or every granted one when omitted."""
+        return self._req("POST", "/orders/close-all-positions", {"connectionId": connection_id})
 
     # ── app bridge ───────────────────────────────────────────────────────────
-    def open_symbol(self, exchange: str, symbol: str) -> dict:
-        return self._req("POST", "/app/open-symbol", {"exchange": exchange, "symbol": symbol})
+    def open_symbol(self, exchange: str, symbol: str, connection_id: str | None = None, views: list[str] | None = None) -> dict:
+        """Open ONE coin in the ACTIVE tab + surface the window — a panel add (201, returns the
+        created slot). connection_id is grant-gated; views default to ["orderbook"]."""
+        body = {"exchange": exchange, "symbol": symbol, "connectionId": connection_id, "views": views}
+        return self._req("POST", "/app/open-symbol", {k: v for k, v in body.items() if v is not None})
 
     def open_combo(self, symbol: str, target: str = "window") -> dict:
         return self._req("POST", "/app/open-combo", {"symbol": symbol, "target": target})
 
-    # ── slot control (/app/panels) ───────────────────────────────────────────
+    # ── panel control (/app/panels) ──────────────────────────────────────────
     # A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
     # terminal restart. content is ONE instrument + the views that render it:
     #   {"exchange": ..., "symbol": ..., "views": ["orderbook"] | ["chart"] | ["orderbook","chart"],
