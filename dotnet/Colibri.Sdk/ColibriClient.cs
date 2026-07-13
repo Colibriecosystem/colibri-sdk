@@ -92,6 +92,10 @@ public sealed class ColibriClient : IDisposable
         GetAsync<Connection>($"/connections/{Uri.EscapeDataString(id)}", ct);
 
     // ── market data ──────────────────────────────────────────────────────────
+    /// <summary>The venue catalog — <c>Id</c> is the string every exchange param accepts; <c>Trading:false</c> = view-only venue.</summary>
+    public async Task<IReadOnlyList<ExchangeInfo>> ExchangesAsync(CancellationToken ct = default) =>
+        (await GetAsync<ExchangesResponse>("/exchanges", ct).ConfigureAwait(false)).Exchanges;
+
     public async Task<IReadOnlyList<SymbolInfo>> SymbolsAsync(string exchange, CancellationToken ct = default) =>
         (await GetAsync<SymbolsResponse>($"/symbols?exchange={Uri.EscapeDataString(exchange)}", ct).ConfigureAwait(false)).Symbols;
 
@@ -146,15 +150,19 @@ public sealed class ColibriClient : IDisposable
 
     /// <summary>
     ///     Add a panel to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click a
-    ///     tab header to copy its id). An EMPTY <paramref name="content" /> adds an empty "+" box
+    ///     tab header to copy its id). A null <paramref name="content" /> adds an empty "+" box
     ///     instead — reserve now, fill later by its durable id via <see cref="SetPanelAsync" />.
     /// </summary>
-    public Task<PanelActionResult> AddPanelAsync(IReadOnlyList<PanelContent> content, string? tabId = null, string? connectionId = null, CancellationToken ct = default) =>
-        SendAsync<PanelActionResult>(HttpMethod.Post, "/app/panels", new { tabId, connectionId, content }, ct);
+    public Task<PanelActionResult> AddPanelAsync(PanelContent? content = null, string? tabId = null, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Post, "/app/panels", new { tabId, content }, ct);
 
-    /// <summary>Idempotently set a slot's desired state; an empty <paramref name="content" /> CLEARS it (the box keeps its id).</summary>
-    public Task<PanelActionResult> SetPanelAsync(string slotId, IReadOnlyList<PanelContent> content, string? connectionId = null, CancellationToken ct = default) =>
-        SendAsync<PanelActionResult>(HttpMethod.Put, $"/app/panels/{Uri.EscapeDataString(slotId)}", new { connectionId, content }, ct);
+    /// <summary>
+    ///     Idempotently set a slot's desired state — instrument, views (kind transitions ok: an
+    ///     orderbook box can become a chart box and back, the id never changes), account. A null
+    ///     <paramref name="content" /> CLEARS the slot (the box stays and keeps its id).
+    /// </summary>
+    public Task<PanelActionResult> SetPanelAsync(string slotId, PanelContent? content = null, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Put, $"/app/panels/{Uri.EscapeDataString(slotId)}", new { content }, ct);
 
     /// <summary>Remove the slot entirely (its paired chart goes with it).</summary>
     public Task<PanelActionResult> RemovePanelAsync(string slotId, CancellationToken ct = default) =>
@@ -180,6 +188,7 @@ public sealed class ColibriClient : IDisposable
 
     private sealed record ConnectionsResponse(IReadOnlyList<Connection> Connections);
     private sealed record PanelsResponse(IReadOnlyList<PanelWindow> Windows);
+    private sealed record ExchangesResponse(IReadOnlyList<ExchangeInfo> Exchanges);
     private sealed record SymbolsResponse(string Exchange, IReadOnlyList<SymbolInfo> Symbols);
     private sealed record PositionsResponse(string ConnectionId, IReadOnlyList<Position> Positions);
     private sealed record OrdersResponse(string ConnectionId, IReadOnlyList<Order> Orders);

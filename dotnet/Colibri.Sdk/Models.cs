@@ -69,8 +69,16 @@ public sealed record PanelTab(string Uuid, int Index, IReadOnlyList<PanelSlot> S
 /// <summary>One window, keyed by position (durable window ids are a later addition).</summary>
 public sealed record PanelWindow(int Index, IReadOnlyList<PanelTab> Tabs);
 
-/// <summary>One desired content item; content[0] must be the orderbook. <c>Interval</c> for charts.</summary>
-public sealed record PanelContent(string Kind, string Exchange, string Symbol, string? Interval = null);
+/// <summary>
+///     The desired content of a slot: ONE instrument + the views that render it. <c>Views</c> ∈
+///     <c>["orderbook"]</c> | <c>["chart"]</c> (a standalone chart slot) | <c>["orderbook","chart"]</c>
+///     (the pair, same instrument, app-default timeframe). <c>ConnectionId</c> binds a trading account
+///     (grant-gated; requires the orderbook view); null = the app adopts the venue's default connection.
+/// </summary>
+public sealed record PanelContent(string Exchange, string Symbol, IReadOnlyList<string> Views, string? ConnectionId = null);
+
+/// <summary>One venue from <c>GET /exchanges</c> — <c>Id</c> is the string every exchange param accepts.</summary>
+public sealed record ExchangeInfo(string Id, string Name, string MarketType, bool Trading);
 
 /// <summary>Result of an add / set / remove — the status plus the affected slot.</summary>
 public sealed record PanelActionResult(string Status, PanelSlot? Panel);

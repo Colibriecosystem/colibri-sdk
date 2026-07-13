@@ -183,13 +183,27 @@ export interface PanelWindow {
   tabs: PanelTab[];
 }
 
-/** One desired content item; content[0] must be the orderbook. */
+/**
+ * The desired content of a slot: ONE instrument + the views that render it.
+ * `views`: `["orderbook"]`, `["chart"]` (a standalone chart slot), or `["orderbook","chart"]`
+ * (the pair — chart stacked under the orderbook, same instrument, app-default timeframe).
+ * `connectionId` binds a trading account (grant-gated; requires the orderbook view); omitted =
+ * the app adopts the venue's default connection by itself.
+ */
 export interface PanelContent {
-  kind: "orderbook" | "chart";
+  connectionId?: string;
   exchange: string;
   symbol: string;
-  /** Chart timeframe, e.g. "m5" — chart items only. */
-  interval?: string;
+  views: ("orderbook" | "chart")[];
+}
+
+/** One venue from GET /exchanges — `id` is the string every `exchange` param accepts. */
+export interface ExchangeInfo {
+  id: string;
+  name: string;
+  marketType: string;
+  /** false = market-data-only venue (no trading surface). */
+  trading: boolean;
 }
 
 /** Result of an add / set / remove — the status plus the affected slot. */

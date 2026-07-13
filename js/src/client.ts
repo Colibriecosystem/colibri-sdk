@@ -4,6 +4,7 @@ import type {
   Book,
   Clusters,
   Connection,
+  ExchangeInfo,
   Funding,
   Order,
   OrderAccepted,
@@ -100,6 +101,10 @@ export class ColibriClient {
   }
 
   // ── market data ──────────────────────────────────────────────────────────
+  /** The venue catalog — `id` is the string every `exchange` param accepts; `trading:false` = view-only venue. */
+  exchanges(): Promise<ExchangeInfo[]> {
+    return this.req<{ exchanges: ExchangeInfo[] }>("GET", "/exchanges").then((r) => r.exchanges);
+  }
   symbols(exchange: string): Promise<SymbolInfo[]> {
     return this.req<{ symbols: SymbolInfo[] }>("GET", `/symbols?exchange=${enc(exchange)}`).then((r) => r.symbols);
   }
@@ -173,20 +178,21 @@ export class ColibriClient {
 
   /**
    * Add a panel to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab
-   * header's right-click menu). `content[0]` is the orderbook; an optional `content[1]` pairs a chart.
-   * `content: []` adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
-   * {@link setPanel} (each empty add reserves a fresh box; `connectionId` is rejected then).
+   * header's right-click menu). `content` is ONE instrument + its views; omit it to add an EMPTY
+   * "+" box instead — reserve now, fill later by its durable id via {@link setPanel} (each empty
+   * add reserves a fresh box).
    */
-  addPanel(body: { tabId?: string; connectionId?: string; content: PanelContent[] }): Promise<PanelActionResult> {
+  addPanel(body: { tabId?: string; content?: PanelContent } = {}): Promise<PanelActionResult> {
     return this.req("POST", "/app/panels", body);
   }
 
   /**
-   * Idempotently set a slot's desired state: change the instrument, pair/unpair a chart, bind an
-   * account — or CLEAR it with `content: []` (the box stays and keeps its id).
+   * Idempotently set a slot's desired state: change the instrument, switch views (a kind
+   * transition — an orderbook box can become a chart box and back; the id never changes), bind an
+   * account — or CLEAR it by omitting `content` (the box stays and keeps its id).
    */
-  setPanel(slotId: string, body: { connectionId?: string; content: PanelContent[] }): Promise<PanelActionResult> {
-    return this.req("PUT", `/app/panels/${enc(slotId)}`, body);
+  setPanel(slotId: string, content?: PanelContent): Promise<PanelActionResult> {
+    return this.req("PUT", `/app/panels/${enc(slotId)}`, { content });
   }
 
   /** Remove the slot entirely (its paired chart goes with it). */

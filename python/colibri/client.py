@@ -141,27 +141,35 @@ class ColibriClient:
 
     # ── slot control (/app/panels) ───────────────────────────────────────────
     # A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
-    # terminal restart. Content items are {"kind": "orderbook"|"chart", "exchange", "symbol",
-    # "interval"?}; content[0] must be the orderbook. Add/change/clear are token-gated; a
-    # connection_id binds a trading account and needs a per-connection GRANT.
+    # terminal restart. content is ONE instrument + the views that render it:
+    #   {"exchange": ..., "symbol": ..., "views": ["orderbook"] | ["chart"] | ["orderbook","chart"],
+    #    "connectionId"?: ...}
+    # connectionId binds a trading account (grant-gated; requires the orderbook view); omitted =
+    # the app adopts the venue's default connection by itself.
+
+    def exchanges(self) -> list[dict]:
+        """The venue catalog — 'id' is the string every exchange param accepts; trading=False = view-only."""
+        return self._req("GET", "/exchanges")["exchanges"]
 
     def panels(self, tab_id: str | None = None, window_index: int | None = None) -> list[dict]:
         """The window → tab → slot tree, optionally scoped to one tab (durable id) / window (index)."""
         return self._req("GET", "/app/panels" + self._qs(tabId=tab_id, windowIndex=window_index))["windows"]
 
-    def add_panel(self, content: list[dict], tab_id: str | None = None, connection_id: str | None = None) -> dict:
+    def add_panel(self, content: dict | None = None, tab_id: str | None = None) -> dict:
         """Add a panel to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id).
 
-        content=[] adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
-        set_panel (each empty add reserves a fresh box; connection_id is rejected then).
+        content=None adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
+        set_panel (each empty add reserves a fresh box).
         """
-        body = {"tabId": tab_id, "connectionId": connection_id, "content": content}
+        body = {"tabId": tab_id, "content": content}
         return self._req("POST", "/app/panels", {k: v for k, v in body.items() if v is not None})
 
-    def set_panel(self, slot_id: str, content: list[dict], connection_id: str | None = None) -> dict:
-        """Idempotently set a slot's desired state; content=[] CLEARS it (the box keeps its id)."""
-        body = {"connectionId": connection_id, "content": content}
-        return self._req("PUT", f"/app/panels/{slot_id}", {k: v for k, v in body.items() if v is not None})
+    def set_panel(self, slot_id: str, content: dict | None = None) -> dict:
+        """Idempotently set a slot's desired state — instrument, views (kind transitions ok), account.
+
+        content=None CLEARS the slot (the box stays and keeps its id).
+        """
+        return self._req("PUT", f"/app/panels/{slot_id}", {"content": content} if content is not None else {})
 
     def remove_panel(self, slot_id: str) -> dict:
         """Remove the slot entirely (its paired chart goes with it)."""
