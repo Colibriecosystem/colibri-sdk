@@ -142,6 +142,62 @@ export interface TradePush {
   timeMs: number;
 }
 
+// ── Slot control (/app/panels) ────────────────────────────────────────────────
+// A SLOT is the durable box — addressed by its GUID `slotId`, which survives an instrument change,
+// a clear, and a terminal restart. A PANEL is the content that fills it (an orderbook, optionally
+// paired with a chart). Copy an id from the terminal: the ⧉ control on a panel, or right-click a
+// tab header → "Copy tab ID" for the POST add-target.
+
+/** The chart paired into a slot's column (content[1]). */
+export interface PanelChart {
+  exchange: string;
+  symbol: string;
+  interval: string;
+  contentId: string;
+}
+
+/** One slot in the tree. `slotId` is the durable op key; `contentId` is the per-instrument id. */
+export interface PanelSlot {
+  slotId: string;
+  kind: "orderbook" | "chart" | "empty";
+  empty: boolean;
+  exchange: string | null;
+  symbol: string | null;
+  contentId: string | null;
+  /** The bound trading account; null = view-only. */
+  connectionId: string | null;
+  viewOnly: boolean;
+  chart: PanelChart | null;
+}
+
+/** One tab, keyed by its durable `uuid` — the add target for POST /app/panels. */
+export interface PanelTab {
+  uuid: string;
+  index: number;
+  slots: PanelSlot[];
+}
+
+/** One window, keyed by position (durable window ids are a later addition). */
+export interface PanelWindow {
+  index: number;
+  tabs: PanelTab[];
+}
+
+/** One desired content item; content[0] must be the orderbook. */
+export interface PanelContent {
+  kind: "orderbook" | "chart";
+  exchange: string;
+  symbol: string;
+  /** Chart timeframe, e.g. "m5" — chart items only. */
+  interval?: string;
+}
+
+/** Result of an add / set / remove — the status plus the affected slot. */
+export interface PanelActionResult {
+  status: string;
+  panel: PanelSlot | null;
+}
+
 /** Live WebSocket channels on `/stream`. */
 export type Channel =
   | "book"

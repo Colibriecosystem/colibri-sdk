@@ -38,8 +38,9 @@ so `/stream` also accepts `?access_token=<token>`.
 
 - Prices / sizes / quantities are **decimal strings** (`"64950.10"`) — JSON floats lose crypto tick precision.
 - Errors are `{ "error": { "code", "message" } }` with an HTTP status. Codes: `unauthorized`,
-  `forbidden_origin`, `unknown_connection`, `unknown_symbol`, `trading_not_enabled`, `permission_denied`,
-  `not_ready`, `rate_limited`, `bad_request`, `unavailable`, `internal`.
+  `forbidden_origin`, `unknown_connection`, `unknown_symbol`, `unknown_panel`, `unknown_tab`,
+  `trading_not_enabled`, `permission_denied`, `not_ready`, `rate_limited`, `bad_request`,
+  `unavailable`, `internal`.
 
 ---
 
@@ -92,6 +93,29 @@ so `/stream` also accepts `?access_token=<token>`.
 | POST | `/app/open-combo` | `{symbol, target}` — fan across every connection (`target`: `tab`\|`window`) |
 | POST | `/notifications` | `{message, severity?, source?}` — raise a toast |
 | POST | `/signals` | `{exchange, symbol, text}` — post into Notifications → API tab |
+
+### Slot control — drive the terminal's panels by a durable id
+
+A **slot** is the durable box in the terminal's grid — addressed by a GUID `slotId` that survives an
+**instrument change**, a **clear**, and a terminal **restart**, so a tool can drive the same box
+forever. A **panel** is the content that fills it (an orderbook, optionally paired with a chart).
+Copy ids from the terminal once at setup: the **⧉ Copy ID** control on a panel (hover the tool pill;
+top-right on an empty box) for a slot, or **right-click a tab header → Copy tab ID** (also in the
+tab-settings dialog header) for the `POST` add-target.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/app/panels` | `?tabId=<uuid>` `?windowIndex=N` (optional scoping). → `{windows: [{index, tabs: [{uuid, index, slots: [{slotId, kind, empty, exchange?, symbol?, contentId?, connectionId?, viewOnly, chart?}]}]}]}` |
+| POST | `/app/panels` | `{tabId?, connectionId?, content: [...]}` — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first) |
+| PUT | `/app/panels/{slotId}` | `{connectionId?, content: [...]}` — **idempotent** desired-state set: fill / change instrument / pair a chart / bind an account; `content: []` **clears** (the box stays, same id) |
+| DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
+
+`content` = `[{kind, exchange, symbol, interval?}]`, ≤2 items, `content[0]` the orderbook (`kind:
+"orderbook"`), optional `content[1]` a paired chart (`kind: "chart"`, `interval` e.g. `"m5"`).
+Add / change / clear are display actions — **token only**; a `connectionId` in a body binds a trading
+account and is **grant-gated** like trading. Every write pulses the affected panel and logs a row in
+the terminal's Notifications → **API** tab. `kind` in the tree is `orderbook`|`chart`|`empty`;
+`connectionId: null` = view-only.
 
 ### Signal levels (API-owned price alerts, drawn on the ladder)
 | Method | Path | Notes |

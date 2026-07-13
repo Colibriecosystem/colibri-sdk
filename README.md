@@ -62,8 +62,10 @@ var book = await client.BookAsync("BinanceSpot", "BTCUSDT", depth: 10);
 Read: `/ping` · `/connections` · `/symbols` · `/book` · `/clusters` · `/funding` · `/positions` ·
 `/orders` · `/balance`. Trade (per-connection grant): place / cancel / cancel-all / panic. Bridge:
 open a symbol or combo in the terminal, raise a toast, post a market signal, manage price-alert
-signal levels. Stream: `book`, `trades`, `funding`, `positions`, `orders`, `balance`,
-`notifications`, `signalLevels`.
+signal levels. **Slot control** (`/app/panels`): enumerate the terminal's window → tab → slot tree
+and drive any panel by its **durable slot id** (survives an instrument change, a clear, and restart) —
+add / change / clear / remove a panel, pair a chart, bind a granted trading account. Stream: `book`,
+`trades`, `funding`, `positions`, `orders`, `balance`, `notifications`, `signalLevels`.
 
 See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract.
 
@@ -79,6 +81,7 @@ in `dotnet/Colibri.Sdk.Examples`):
 | `account` | connections · positions · orders · balance |
 | `trading` | place · cancel · cancel-all · panic *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
 | `app-and-signals` | open-symbol · open-combo · notify · signal · signal-levels CRUD |
+| `panels` | slot control: tree → add → change (id stable) → clear → remove |
 | `orderbook-stream` / `live-trades` | focused WebSocket streams |
 | `stream-all` | every WS channel at once |
 

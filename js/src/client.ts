@@ -7,6 +7,9 @@ import type {
   Funding,
   Order,
   OrderAccepted,
+  PanelActionResult,
+  PanelContent,
+  PanelWindow,
   Ping,
   PlaceOrder,
   Position,
@@ -152,6 +155,41 @@ export class ColibriClient {
   /** Open the coin as a COMBO — one panel per connection that lists it. `target`: "tab" | "window". */
   openCombo(symbol: string, target: "tab" | "window" = "window"): Promise<{ opened: boolean }> {
     return this.req("POST", "/app/open-combo", { symbol, target });
+  }
+
+  // ── slot control (/app/panels) ────────────────────────────────────────────
+  // A SLOT is the durable box — its GUID `slotId` survives an instrument change, a clear, and a
+  // terminal restart, so a tool can drive the same box forever. Add/change/clear are token-gated;
+  // a `connectionId` in a body binds a trading account and needs a per-connection GRANT.
+
+  /** The window → tab → slot tree. Scope with `tabId` (durable) and/or `windowIndex` (positional). */
+  panels(opts: { tabId?: string; windowIndex?: number } = {}): Promise<PanelWindow[]> {
+    const q = new URLSearchParams();
+    if (opts.tabId) q.set("tabId", opts.tabId);
+    if (opts.windowIndex != null) q.set("windowIndex", String(opts.windowIndex));
+    const qs = q.toString();
+    return this.req<{ windows: PanelWindow[] }>("GET", `/app/panels${qs ? "?" + qs : ""}`).then((r) => r.windows);
+  }
+
+  /**
+   * Add a panel to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab
+   * header's right-click menu). `content[0]` is the orderbook; an optional `content[1]` pairs a chart.
+   */
+  addPanel(body: { tabId?: string; connectionId?: string; content: PanelContent[] }): Promise<PanelActionResult> {
+    return this.req("POST", "/app/panels", body);
+  }
+
+  /**
+   * Idempotently set a slot's desired state: change the instrument, pair/unpair a chart, bind an
+   * account — or CLEAR it with `content: []` (the box stays and keeps its id).
+   */
+  setPanel(slotId: string, body: { connectionId?: string; content: PanelContent[] }): Promise<PanelActionResult> {
+    return this.req("PUT", `/app/panels/${enc(slotId)}`, body);
+  }
+
+  /** Remove the slot entirely (its paired chart goes with it). */
+  removePanel(slotId: string): Promise<PanelActionResult> {
+    return this.req("DELETE", `/app/panels/${enc(slotId)}`);
   }
 
   // ── notifications & signals ──────────────────────────────────────────────

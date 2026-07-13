@@ -121,6 +121,41 @@ public sealed class ColibriClient : IDisposable
     public Task CancelAllAsync(string connectionId, string exchange, string symbol, CancellationToken ct = default) =>
         SendAsync<object>(HttpMethod.Post, "/orders/cancelAll", new { connectionId, exchange, symbol }, ct);
 
+    // ── slot control (/app/panels) ───────────────────────────────────────────
+    // A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
+    // terminal restart. Add/change/clear are token-gated; a connectionId binds a trading account
+    // and needs a per-connection GRANT (like trading).
+
+    /// <summary>The window → tab → slot tree; scope with <paramref name="tabId" /> (durable) / <paramref name="windowIndex" /> (positional).</summary>
+    public async Task<IReadOnlyList<PanelWindow>> PanelsAsync(string? tabId = null, int? windowIndex = null, CancellationToken ct = default)
+    {
+        var q = new List<string>(2);
+        if (!string.IsNullOrEmpty(tabId))
+        {
+            q.Add($"tabId={Uri.EscapeDataString(tabId)}");
+        }
+
+        if (windowIndex is { } wi)
+        {
+            q.Add($"windowIndex={wi}");
+        }
+
+        var qs = q.Count > 0 ? "?" + string.Join("&", q) : "";
+        return (await GetAsync<PanelsResponse>($"/app/panels{qs}", ct).ConfigureAwait(false)).Windows;
+    }
+
+    /// <summary>Add a panel to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click a tab header to copy its id).</summary>
+    public Task<PanelActionResult> AddPanelAsync(IReadOnlyList<PanelContent> content, string? tabId = null, string? connectionId = null, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Post, "/app/panels", new { tabId, connectionId, content }, ct);
+
+    /// <summary>Idempotently set a slot's desired state; an empty <paramref name="content" /> CLEARS it (the box keeps its id).</summary>
+    public Task<PanelActionResult> SetPanelAsync(string slotId, IReadOnlyList<PanelContent> content, string? connectionId = null, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Put, $"/app/panels/{Uri.EscapeDataString(slotId)}", new { connectionId, content }, ct);
+
+    /// <summary>Remove the slot entirely (its paired chart goes with it).</summary>
+    public Task<PanelActionResult> RemovePanelAsync(string slotId, CancellationToken ct = default) =>
+        SendAsync<PanelActionResult>(HttpMethod.Delete, $"/app/panels/{Uri.EscapeDataString(slotId)}", null, ct);
+
     // ── app bridge / signals ─────────────────────────────────────────────────
     public Task OpenSymbolAsync(string exchange, string symbol, CancellationToken ct = default) =>
         SendAsync<object>(HttpMethod.Post, "/app/open-symbol", new { exchange, symbol }, ct);
@@ -140,6 +175,7 @@ public sealed class ColibriClient : IDisposable
     public void Dispose() => _http.Dispose();
 
     private sealed record ConnectionsResponse(IReadOnlyList<Connection> Connections);
+    private sealed record PanelsResponse(IReadOnlyList<PanelWindow> Windows);
     private sealed record SymbolsResponse(string Exchange, IReadOnlyList<SymbolInfo> Symbols);
     private sealed record PositionsResponse(string ConnectionId, IReadOnlyList<Position> Positions);
     private sealed record OrdersResponse(string ConnectionId, IReadOnlyList<Order> Orders);

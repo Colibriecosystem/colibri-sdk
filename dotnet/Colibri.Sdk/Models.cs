@@ -42,6 +42,39 @@ public sealed record OrderAccepted(string ClientOrderId, string Status);
 
 public sealed record SignalLevel(string Id, string Exchange, string Symbol, string Price, string Direction, string? Note, bool OneShot, long CreatedMs);
 
+// ── Slot control (/app/panels) ────────────────────────────────────────────────
+// A SLOT is the durable box — addressed by its GUID SlotId, which survives an instrument change, a
+// clear, and a terminal restart. A PANEL is the content that fills it (an orderbook, optionally
+// paired with a chart). Copy ids in the terminal: the ⧉ control on a panel; right-click a tab
+// header → "Copy tab ID" for the POST add-target.
+
+/// <summary>The chart paired into a slot's column (content[1]).</summary>
+public sealed record PanelChart(string Exchange, string Symbol, string Interval, string ContentId);
+
+/// <summary>One slot. <c>SlotId</c> is the durable op key; <c>Kind</c> ∈ orderbook|chart|empty.</summary>
+public sealed record PanelSlot(
+    string SlotId,
+    string Kind,
+    bool Empty,
+    string? Exchange,
+    string? Symbol,
+    string? ContentId,
+    string? ConnectionId,
+    bool ViewOnly,
+    PanelChart? Chart);
+
+/// <summary>One tab, keyed by its durable <c>Uuid</c> — the add target for POST /app/panels.</summary>
+public sealed record PanelTab(string Uuid, int Index, IReadOnlyList<PanelSlot> Slots);
+
+/// <summary>One window, keyed by position (durable window ids are a later addition).</summary>
+public sealed record PanelWindow(int Index, IReadOnlyList<PanelTab> Tabs);
+
+/// <summary>One desired content item; content[0] must be the orderbook. <c>Interval</c> for charts.</summary>
+public sealed record PanelContent(string Kind, string Exchange, string Symbol, string? Interval = null);
+
+/// <summary>Result of an add / set / remove — the status plus the affected slot.</summary>
+public sealed record PanelActionResult(string Status, PanelSlot? Panel);
+
 /// <summary>Place an order. Give EITHER SizeQuote (spend N quote) OR SizeBase (N coins). Price for LIMIT only.</summary>
 public sealed record PlaceOrderRequest
 {
