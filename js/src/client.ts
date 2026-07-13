@@ -174,6 +174,8 @@ export class ColibriClient {
   /**
    * Add a panel to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab
    * header's right-click menu). `content[0]` is the orderbook; an optional `content[1]` pairs a chart.
+   * `content: []` adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
+   * {@link setPanel} (each empty add reserves a fresh box; `connectionId` is rejected then).
    */
   addPanel(body: { tabId?: string; connectionId?: string; content: PanelContent[] }): Promise<PanelActionResult> {
     return this.req("POST", "/app/panels", body);

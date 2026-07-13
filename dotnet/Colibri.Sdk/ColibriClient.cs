@@ -144,7 +144,11 @@ public sealed class ColibriClient : IDisposable
         return (await GetAsync<PanelsResponse>($"/app/panels{qs}", ct).ConfigureAwait(false)).Windows;
     }
 
-    /// <summary>Add a panel to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click a tab header to copy its id).</summary>
+    /// <summary>
+    ///     Add a panel to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click a
+    ///     tab header to copy its id). An EMPTY <paramref name="content" /> adds an empty "+" box
+    ///     instead — reserve now, fill later by its durable id via <see cref="SetPanelAsync" />.
+    /// </summary>
     public Task<PanelActionResult> AddPanelAsync(IReadOnlyList<PanelContent> content, string? tabId = null, string? connectionId = null, CancellationToken ct = default) =>
         SendAsync<PanelActionResult>(HttpMethod.Post, "/app/panels", new { tabId, connectionId, content }, ct);
 

@@ -215,7 +215,7 @@ const EP = [
   ["Slot control","GET","/app/panels","Window → tab → slot tree. slotId = the durable box handle (survives change/clear/restart); tabId/windowIndex scope it",{q:[["tabId",""],["windowIndex",""]],
     ok:{windows:[{index:0,tabs:[{uuid:"9c1d7f2ab34e4d0f8a56b7c8d9e0f1a2",index:0,slots:[{slotId:"1a2b3c4d5e6f",kind:"orderbook",empty:false,exchange:"BinanceSpot",symbol:"BTCUSDT",contentId:"aa11bb22cc33",connectionId:null,viewOnly:true,chart:null}]}]}]},
     errc:404, err:ERR("unknown_tab","No tab with that id")}],
-  ["Slot control","POST","/app/panels","Add a panel to a tab (active tab when tabId omitted; connectionId binds a granted account)",{b:'{"tabId":"","content":[{"kind":"orderbook","exchange":"BinanceSpot","symbol":"BTCUSDT"}]}',
+  ["Slot control","POST","/app/panels","Add a panel to a tab (active tab when tabId omitted; connectionId binds a granted account; content:[] adds an EMPTY box to fill later by id)",{b:'{"tabId":"","content":[{"kind":"orderbook","exchange":"BinanceSpot","symbol":"BTCUSDT"}]}',
     ok:{status:"added",panel:{slotId:"1a2b3c4d5e6f",kind:"orderbook",empty:false,exchange:"BinanceSpot",symbol:"BTCUSDT",contentId:"aa11bb22cc33",connectionId:null,viewOnly:true,chart:null}},
     errc:404, err:ERR("unknown_tab","No tab with that id")}],
   ["Slot control","PUT","/app/panels/{id}","Idempotent desired-state set: change instrument / clear (content:[]) / bind account / pair a chart",{p:[["id","1a2b3c4d5e6f"]],b:'{"content":[{"kind":"orderbook","exchange":"BinanceSpot","symbol":"ETHUSDT"}]}',

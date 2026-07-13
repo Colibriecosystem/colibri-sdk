@@ -150,7 +150,11 @@ class ColibriClient:
         return self._req("GET", "/app/panels" + self._qs(tabId=tab_id, windowIndex=window_index))["windows"]
 
     def add_panel(self, content: list[dict], tab_id: str | None = None, connection_id: str | None = None) -> dict:
-        """Add a panel to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id)."""
+        """Add a panel to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id).
+
+        content=[] adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
+        set_panel (each empty add reserves a fresh box; connection_id is rejected then).
+        """
         body = {"tabId": tab_id, "connectionId": connection_id, "content": content}
         return self._req("POST", "/app/panels", {k: v for k, v in body.items() if v is not None})
 

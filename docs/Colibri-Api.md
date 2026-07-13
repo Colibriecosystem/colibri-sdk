@@ -106,7 +106,7 @@ tab-settings dialog header) for the `POST` add-target.
 | Method | Path | Body / notes |
 |---|---|---|
 | GET | `/app/panels` | `?tabId=<uuid>` `?windowIndex=N` (optional scoping). → `{windows: [{index, tabs: [{uuid, index, slots: [{slotId, kind, empty, exchange?, symbol?, contentId?, connectionId?, viewOnly, chart?}]}]}]}` |
-| POST | `/app/panels` | `{tabId?, connectionId?, content: [...]}` — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first) |
+| POST | `/app/panels` | `{tabId?, connectionId?, content: [...]}` — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first). `content: []` (or absent) adds an **empty "+" box** instead — reserve now, fill later by its durable id via PUT |
 | PUT | `/app/panels/{slotId}` | `{connectionId?, content: [...]}` — **idempotent** desired-state set: fill / change instrument / pair a chart / bind an account; `content: []` **clears** (the box stays, same id) |
 | DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
 
