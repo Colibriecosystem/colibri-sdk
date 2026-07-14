@@ -112,11 +112,7 @@ info:
 
 servers:
   - url: http://127.0.0.1:18845
-    description: >-
-      Loopback only. 18845 is the preferred default port — the terminal walks to a free port when
-      it is taken, so read the real port from the discovery file
-      (%APPDATA%\Colibri\localapi.json) or Settings → Program → Local API. Browser-based "try it"
-      requests additionally need the "Allow web browser access" toggle.
+    description: Loopback, default port — see "Connecting" for port discovery + the browser toggle.
 
 security:
   - bearerToken: []
