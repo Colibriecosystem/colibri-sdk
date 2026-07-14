@@ -588,13 +588,13 @@ paths:
     delete:
       operationId: cancelAllOrdersEverywhere
       tags: [Trading]
-      summary: "Emergency sweep: cancel every order on EVERY granted account"
+      summary: Cancel every order on every granted account
       description: >-
-        The all-granted sweep — one HTTP call, no client loop (the terminal's global cancel-all
-        hotkey scope). Cancels every order (regular + triggers) on every connection granted API
-        trading; positions are untouched. Best-effort per account: one account's failure never
-        aborts the rest. Answers `202` with how many accounts the action was dispatched to;
-        `403 trading_not_enabled` when NO connection is granted.
+        One HTTP call, no client loop (the terminal's global cancel-all hotkey scope). Cancels
+        every order (regular + triggers) on every connection granted API trading; positions are
+        untouched. Best-effort per account: one account's failure never aborts the rest. Answers
+        `202` with how many accounts the action was dispatched to; `403 trading_not_enabled` when
+        NO connection is granted.
       responses:
         "202":
           description: Dispatched.
@@ -611,12 +611,12 @@ paths:
     delete:
       operationId: closeAllPositionsEverywhere
       tags: [Trading]
-      summary: "Emergency sweep: close every position on EVERY granted account"
+      summary: Close every position on every granted account
       description: >-
-        The all-granted super-panic — close every position at market + cancel leftover orders on
-        every connection granted API trading (the terminal's global super-panic hotkey scope).
-        Best-effort per account. Answers `202` with the dispatched-account count;
-        `403 trading_not_enabled` when NO connection is granted.
+        Close every position at market + cancel leftover orders on every connection granted API
+        trading (the terminal's global close-all hotkey scope). Best-effort per account. Answers
+        `202` with the dispatched-account count; `403 trading_not_enabled` when NO connection is
+        granted.
       responses:
         "202":
           description: Dispatched.

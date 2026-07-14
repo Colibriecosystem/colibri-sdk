@@ -59,6 +59,20 @@
   /* Stoplight Elements ships a full dark palette keyed off html[data-theme="dark"];
      the page body just has to match its dark canvas. */
   html[data-theme="dark"] body { background: #090c11; }
+  /* Elements' dark theme misses the read-only code viewers (Request Sample /
+     Response Example) — their Prism tokens keep light-theme colors (navy strings,
+     near-black punctuation) on the dark panel. Re-color them to the same palette
+     the Try It editor already uses in dark mode. */
+  html[data-theme="dark"] #docs pre .token.punctuation { color: #e3e3e3 !important; }
+  html[data-theme="dark"] #docs pre .token.property { color: #80cbc4 !important; }
+  html[data-theme="dark"] #docs pre .token.string { color: #a5d6ff !important; }
+  html[data-theme="dark"] #docs pre .token.operator { color: #ff7b72 !important; }
+  html[data-theme="dark"] #docs pre .token.boolean,
+  html[data-theme="dark"] #docs pre .token.number { color: #79c0ff !important; }
+  html[data-theme="dark"] #docs pre .token.function { color: #d2a8ff !important; }
+  html[data-theme="dark"] #docs pre .token.keyword { color: #ff7b72 !important; }
+  html[data-theme="dark"] #docs pre .token.comment { color: #8b949e !important; }
+  html[data-theme="dark"] #docs pre .token.plain { color: #d9d9d9 !important; }
 </style>
 </head>
 <body>

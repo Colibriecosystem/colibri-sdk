@@ -1,4 +1,4 @@
-"""Trading — place, cancel, bulk cancel, emergency sweeps. GRANT-GATED.
+"""Trading — place, cancel, bulk cancel, all-granted sweeps. GRANT-GATED.
 
 SAFETY: this places a REAL order. It is a no-op unless armed:
     COLIBRI_ARM=1 python examples/trading.py
@@ -43,6 +43,6 @@ print("cancel-all (symbol) done")
 # DELETE /connections/{id}/positions  — close every position + cancel leftovers on this account
 # client.close_positions(conn["id"])
 
-# Emergency sweeps — EVERY granted account, one call (the terminal's global hotkey scopes):
+# All-granted sweeps — EVERY granted account, one call (the terminal's global hotkey scopes):
 print("sweep cancel-all-orders:", client.cancel_all_orders())   # DELETE /orders
 # print("sweep close-all-positions:", client.close_all_positions())  # DELETE /positions

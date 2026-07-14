@@ -162,11 +162,11 @@ class ColibriClient:
         return self._req("DELETE", f"/connections/{urllib.parse.quote(connection_id)}/positions")
 
     def cancel_all_orders(self) -> dict:
-        """DELETE /orders — emergency sweep: cancel every order on EVERY granted account."""
+        """DELETE /orders — cancel every order on EVERY granted account."""
         return self._req("DELETE", "/orders")
 
     def close_all_positions(self) -> dict:
-        """DELETE /positions — emergency sweep: close every position on EVERY granted account."""
+        """DELETE /positions — close every position on EVERY granted account."""
         return self._req("DELETE", "/positions")
 
     # ── app bridge ───────────────────────────────────────────────────────────

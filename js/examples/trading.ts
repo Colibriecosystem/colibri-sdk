@@ -1,4 +1,4 @@
-// Trading — place, cancel, bulk cancel, emergency sweeps. GRANT-GATED (Settings → Program → Local API).
+// Trading — place, cancel, bulk cancel, all-granted sweeps. GRANT-GATED (Settings → Program → Local API).
 //
 // SAFETY: this example places a REAL order. It is a no-op UNLESS you arm it:
 //   COLIBRI_ARM=1 npx tsx examples/trading.ts
@@ -50,6 +50,6 @@ console.log("cancel-all (symbol) done");
 // DELETE /connections/{id}/positions — close every position + cancel leftovers on this account
 // await client.closePositions(conn.id);
 
-// Emergency sweeps — EVERY granted account, one call (the terminal's global hotkey scopes):
+// All-granted sweeps — EVERY granted account, one call (the terminal's global hotkey scopes):
 console.log("sweep cancel-all-orders:", await client.cancelAllOrders()); // DELETE /orders
 // console.log("sweep close-all-positions:", await client.closeAllPositions()); // DELETE /positions

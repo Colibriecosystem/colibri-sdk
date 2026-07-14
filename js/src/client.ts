@@ -172,11 +172,11 @@ export class ColibriClient {
   closePositions(connectionId: string): Promise<{ status: string }> {
     return this.req("DELETE", `/connections/${enc(connectionId)}/positions`);
   }
-  /** DELETE /orders — emergency sweep: cancel every order on EVERY granted account (the terminal's global cancel-all hotkey scope). */
+  /** DELETE /orders — cancel every order on EVERY granted account (the terminal's global cancel-all hotkey scope). */
   cancelAllOrders(): Promise<SweepResult> {
     return this.req("DELETE", "/orders");
   }
-  /** DELETE /positions — emergency sweep: close every position + cancel leftovers on EVERY granted account (the global super-panic scope). */
+  /** DELETE /positions — close every position + cancel leftovers on EVERY granted account (the terminal's global close-all hotkey scope). */
   closeAllPositions(): Promise<SweepResult> {
     return this.req("DELETE", "/positions");
   }

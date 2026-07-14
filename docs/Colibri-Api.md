@@ -58,7 +58,7 @@ so `/stream` also accepts `?access_token=<token>`.
 
 Resources nest under their owner (the RESTful redesign, 2026-07): a venue's data under
 `/exchanges/{exchange}` and `/markets/{exchange}/{symbol}`, an account's data + trading under
-`/connections/{id}`, the all-granted emergency sweeps at the top-level collections. Full
+`/connections/{id}`, the all-granted sweeps at the top-level collections. Full
 request/response shapes live in [`openapi.yaml`](openapi.yaml).
 
 | Method | Path | Notes |
@@ -77,8 +77,8 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | DELETE | `/connections/{id}/orders/{clientOrderId}?symbol=` | cancel one (symbol required) → `202` |
 | DELETE | `/connections/{id}/orders[?symbol=]` | bulk cancel: one symbol, or the whole account when unscoped → `202` |
 | DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
-| DELETE | `/orders` | **emergency sweep**: cancel every order on EVERY granted account → `202 {status, accounts}` |
-| DELETE | `/positions` | **emergency sweep**: close every position on EVERY granted account → `202 {status, accounts}` |
+| DELETE | `/orders` | cancel every order on EVERY granted account → `202 {status, accounts}` |
+| DELETE | `/positions` | close every position on EVERY granted account → `202 {status, accounts}` |
 | GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → slot tree |
 | POST | `/app/panels` | `{tabId?, content?, activate?}` → `201` — add a panel (null content = empty "+" box; `activate` surfaces the window — the open-symbol gesture) |
 | PUT | `/app/panels/{slotId}` | `{content?}` — idempotent desired-state set (kind transitions ok; null content = clear, box keeps its id) |

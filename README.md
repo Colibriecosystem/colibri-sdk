@@ -67,7 +67,7 @@ Read: `/ping` · `/exchanges` · `/exchanges/{exchange}/symbols` · `/markets/{e
 · `…/clusters` · `…/funding` · `/connections` · `/connections/{id}/positions|orders|balances` ·
 orderbook settings (GET/PATCH). Trade (per-connection grant; the venue derives from the connection):
 place / cancel / bulk cancel (`/connections/{id}/orders`), close positions
-(`/connections/{id}/positions`), and the all-granted emergency sweeps (`DELETE /orders`,
+(`/connections/{id}/positions`), and the all-granted sweeps (`DELETE /orders`,
 `DELETE /positions`). Bridge: open a symbol or combo in the terminal, raise a toast, post a market
 signal, manage price-alert signal levels (incl. the triggered-lifecycle sweep). **Panel control**
 (`/app/panels`): enumerate the terminal's window → tab → slot tree and drive any panel by its
@@ -87,7 +87,7 @@ in `dotnet/Colibri.Sdk.Examples`):
 | `basic-rest` | ping · connections · book |
 | `market-data` | symbols · book · clusters · funding |
 | `account` | connections · positions · orders · balance |
-| `trading` | place · cancel · bulk cancel · emergency sweeps *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
+| `trading` | place · cancel · bulk cancel · all-granted sweeps *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
 | `app-and-signals` | open-symbol · combo · notify · signal · signal-levels CRUD + triggered sweep |
 | `panels` | panel control: tree → add → change (id stable) → clear → remove |
 | `orderbook-stream` / `live-trades` | focused WebSocket streams |

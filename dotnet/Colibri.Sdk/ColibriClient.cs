@@ -158,11 +158,11 @@ public sealed class ColibriClient : IDisposable
     public Task ClosePositionsAsync(string connectionId, CancellationToken ct = default) =>
         SendAsync<object>(HttpMethod.Delete, $"/connections/{E(connectionId)}/positions", null, ct);
 
-    /// <summary>DELETE /orders — emergency sweep: cancel every order on EVERY granted account.</summary>
+    /// <summary>DELETE /orders — cancel every order on EVERY granted account.</summary>
     public Task<SweepResult> CancelAllOrdersAsync(CancellationToken ct = default) =>
         SendAsync<SweepResult>(HttpMethod.Delete, "/orders", null, ct);
 
-    /// <summary>DELETE /positions — emergency sweep: close every position + cancel leftovers on EVERY granted account.</summary>
+    /// <summary>DELETE /positions — close every position + cancel leftovers on EVERY granted account.</summary>
     public Task<SweepResult> CloseAllPositionsAsync(CancellationToken ct = default) =>
         SendAsync<SweepResult>(HttpMethod.Delete, "/positions", null, ct);
 
