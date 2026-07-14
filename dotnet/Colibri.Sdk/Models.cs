@@ -63,8 +63,8 @@ public sealed record SweepResult(string Status, int Accounts);
 ///     One API-owned price alert. A level fires AT MOST ONCE: <c>OneShot</c> removes it on fire,
 ///     else it is kept marked <c>IsTriggered</c> + <c>TriggeredMs</c> (sweep them via
 ///     <c>DELETE /signal-levels/triggered</c>). <c>Direction</c> is the enum NAME
-///     (<c>Above</c>/<c>Below</c>/<c>Cross</c>); <c>ConnectionId</c> is the optional owning
-///     connection (organizational — the fire path is account-agnostic).
+///     (<c>Above</c>/<c>Below</c>/<c>Cross</c>). A level is a pure market alert —
+///     venue + symbol only, never tied to a connection.
 /// </summary>
 public sealed record SignalLevel(
     string Id,
@@ -75,7 +75,6 @@ public sealed record SignalLevel(
     string? Note,
     bool OneShot,
     long CreatedMs,
-    string? ConnectionId,
     bool IsTriggered,
     long? TriggeredMs);
 

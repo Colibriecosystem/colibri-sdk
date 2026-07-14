@@ -257,19 +257,18 @@ export class ColibriClient {
   }
 
   // ── signal levels (API-owned price alerts, drawn on the ladder) ───────────
-  /** GET /signal-levels — filter by venue / symbol / owning connection. */
-  signalLevels(exchange?: string, symbol?: string, connectionId?: string): Promise<SignalLevel[]> {
+  /** GET /signal-levels — filter by venue / symbol. */
+  signalLevels(exchange?: string, symbol?: string): Promise<SignalLevel[]> {
     const q = new URLSearchParams();
     if (exchange) q.set("exchange", exchange);
     if (symbol) q.set("symbol", symbol);
-    if (connectionId) q.set("connectionId", connectionId);
     const qs = q.toString();
     return this.req<{ levels: SignalLevel[] }>("GET", `/signal-levels${qs ? "?" + qs : ""}`).then((r) => r.levels);
   }
   /**
    * POST /signal-levels → 201. A level fires at most once: `oneShot` removes it on fire, else it
-   * is kept marked `isTriggered` (sweep with {@link deleteTriggeredSignalLevels}). `connectionId`
-   * optionally ties the level to a connection (organizational — no trading grant needed).
+   * is kept marked `isTriggered` (sweep with {@link deleteTriggeredSignalLevels}). A level is a
+   * pure market alert — venue + symbol only, never tied to a connection.
    */
   createSignalLevel(l: {
     exchange: string;
@@ -278,7 +277,6 @@ export class ColibriClient {
     direction?: SignalDirection;
     note?: string;
     oneShot?: boolean;
-    connectionId?: string;
   }): Promise<SignalLevel> {
     return this.req("POST", "/signal-levels", l);
   }
@@ -290,7 +288,7 @@ export class ColibriClient {
   deleteSignalLevels(exchange: string, symbol: string): Promise<{ removed: number }> {
     return this.req("DELETE", `/signal-levels?exchange=${enc(exchange)}&symbol=${enc(symbol)}`);
   }
-  /** DELETE /signal-levels/triggered — sweep every fired level (all venues/symbols/connections). */
+  /** DELETE /signal-levels/triggered — sweep every fired level (all venues/symbols). */
   deleteTriggeredSignalLevels(): Promise<{ removed: number }> {
     return this.req("DELETE", "/signal-levels/triggered");
   }

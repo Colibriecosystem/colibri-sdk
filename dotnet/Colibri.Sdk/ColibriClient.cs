@@ -234,10 +234,10 @@ public sealed class ColibriClient : IDisposable
         SendAsync<object>(HttpMethod.Post, "/signals", new { exchange, symbol, text }, ct);
 
     // ── signal levels (API-owned price alerts, drawn on the ladder) ──────────
-    /// <summary>GET /signal-levels — filter by venue / symbol / owning connection.</summary>
-    public async Task<IReadOnlyList<SignalLevel>> SignalLevelsAsync(string? exchange = null, string? symbol = null, string? connectionId = null, CancellationToken ct = default)
+    /// <summary>GET /signal-levels — filter by venue / symbol.</summary>
+    public async Task<IReadOnlyList<SignalLevel>> SignalLevelsAsync(string? exchange = null, string? symbol = null, CancellationToken ct = default)
     {
-        var q = new List<string>(3);
+        var q = new List<string>(2);
         if (!string.IsNullOrEmpty(exchange))
         {
             q.Add($"exchange={E(exchange)}");
@@ -248,11 +248,6 @@ public sealed class ColibriClient : IDisposable
             q.Add($"symbol={E(symbol)}");
         }
 
-        if (!string.IsNullOrEmpty(connectionId))
-        {
-            q.Add($"connectionId={E(connectionId)}");
-        }
-
         var qs = q.Count > 0 ? "?" + string.Join("&", q) : "";
         return (await GetAsync<SignalLevelsResponse>($"/signal-levels{qs}", ct).ConfigureAwait(false)).Levels;
     }
@@ -260,8 +255,8 @@ public sealed class ColibriClient : IDisposable
     /// <summary>
     ///     POST /signal-levels → 201. A level fires at most once: <paramref name="oneShot" />
     ///     removes it on fire, else it is kept marked triggered (sweep via
-    ///     <see cref="DeleteTriggeredSignalLevelsAsync" />). <paramref name="connectionId" />
-    ///     optionally ties the level to a connection (organizational — no trading grant needed).
+    ///     <see cref="DeleteTriggeredSignalLevelsAsync" />). A level is a pure market alert —
+    ///     venue + symbol only, never tied to a connection.
     /// </summary>
     public Task<SignalLevel> CreateSignalLevelAsync(
         string exchange,
@@ -270,9 +265,8 @@ public sealed class ColibriClient : IDisposable
         string direction = "cross",
         string? note = null,
         bool oneShot = false,
-        string? connectionId = null,
         CancellationToken ct = default) =>
-        SendAsync<SignalLevel>(HttpMethod.Post, "/signal-levels", new { exchange, symbol, price, direction, note, oneShot, connectionId }, ct);
+        SendAsync<SignalLevel>(HttpMethod.Post, "/signal-levels", new { exchange, symbol, price, direction, note, oneShot }, ct);
 
     /// <summary>DELETE /signal-levels/{id} → {removed: 1}.</summary>
     public Task<SignalLevelRemoved> DeleteSignalLevelAsync(string id, CancellationToken ct = default) =>

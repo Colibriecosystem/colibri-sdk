@@ -33,7 +33,7 @@ const level = await client.createSignalLevel({
 });
 console.log("\ncreated level:", level.id, "@", level.price, "triggered:", level.isTriggered);
 
-// GET /signal-levels?exchange=&symbol=  (a connectionId filter is available too)
+// GET /signal-levels?exchange=&symbol=
 console.log("levels now:", (await client.signalLevels(EXCHANGE, SYMBOL)).map((l) => `${l.price} (${l.direction})`));
 
 // DELETE /signal-levels/{id}

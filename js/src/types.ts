@@ -157,8 +157,6 @@ export interface SignalLevel {
   note: string | null;
   oneShot: boolean;
   createdMs: number;
-  /** The optional owning connection (organizational — the fire path is account-agnostic). */
-  connectionId: string | null;
   /** true once the level has fired (non-one-shot levels only). */
   isTriggered: boolean;
   /** Fire time, unix ms; null while untriggered. */

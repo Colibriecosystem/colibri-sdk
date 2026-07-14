@@ -84,16 +84,16 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | POST | `/app/combos` | `{symbol, target?}` → `201` — fan across every connection (`target`: `tab`\|`window`) |
 | POST | `/notifications` | `{message, severity?, source?}` — raise a toast |
 | POST | `/signals` | `{exchange, symbol, text}` — post into Notifications → API tab |
-| GET | `/signal-levels` | `?exchange=` `?symbol=` `?connectionId=` → `{levels}` |
-| POST | `/signal-levels` | `{exchange, symbol, price, direction?, note?, oneShot?, connectionId?}` → `201` SignalLevel |
+| GET | `/signal-levels` | `?exchange=` `?symbol=` → `{levels}` |
+| POST | `/signal-levels` | `{exchange, symbol, price, direction?, note?, oneShot?}` → `201` SignalLevel |
 | DELETE | `/signal-levels/{id}` | remove one → `{removed}` |
 | DELETE | `/signal-levels?exchange=&symbol=` | clear a symbol → `{removed}` |
 | DELETE | `/signal-levels/triggered` | sweep every fired level → `{removed}` |
 
 **Signal-level lifecycle:** a level fires **at most once**. `oneShot: true` → auto-removed on fire;
 `oneShot: false` (default) → kept, marked `isTriggered` + `triggeredMs` (an audit row — sweep via
-`DELETE /signal-levels/triggered`). `connectionId` is an optional organizational owner (must exist;
-no trading grant — a level moves no money).
+`DELETE /signal-levels/triggered`). A level is a pure market alert — venue + symbol only, never
+tied to a connection.
 
 **Panel control:** a **slot** is the durable box in the terminal's grid — its GUID `slotId` survives
 an instrument change, a clear, a view/kind transition, and a terminal restart. A **panel** is the
@@ -110,7 +110,7 @@ connection by itself (no grant needed — the app picks, not the API).
 | `exchange` | market data, signals, panels `content`, signal levels | string — an `id` from **`GET /exchanges`** (e.g. `BinanceSpot`, `BinanceLinearFutures`, `BybitLinearPerpetual`) | Enum names, case-insensitive on parse; a venue with `trading: false` is view-only. Trading routes need NO exchange — the connection determines it |
 | `symbol` | same | string, the venue's wire symbol (`BTCUSDT`; quote-first venues keep their native form, e.g. UpBit `KRW-BTC`) | From `GET /exchanges/{exchange}/symbols` |
 | `views` | panels `content` | array — `"orderbook"`, `"chart"` (dedup, ≥1) | `["chart"]` = a standalone chart slot; both = the pair (chart stacked under the orderbook, same instrument, app-default timeframe) |
-| `connectionId` | trading URLs, panels `content`, signal levels | string — an `id` from `GET /connections` | Trading + panel binding are **grant-gated** (Settings → Program → Local API); a signal level's owner is organizational only. Panels: requires the orderbook view; omitted = the app adopts the venue's default connection |
+| `connectionId` | trading URLs, panels `content` | string — an `id` from `GET /connections` | Trading + panel binding are **grant-gated** (Settings → Program → Local API). Panels: requires the orderbook view; omitted = the app adopts the venue's default connection |
 | `tabId` | `POST /app/panels`, `GET ?tabId=` | GUID ("N" form) — a tab's durable id | Copy: right-click a tab header → **Copy tab ID** |
 | `slotId` | `/app/panels/{slotId}` | GUID ("N" form) — the durable box handle | Copy: the ⧉ control on a panel; survives change / clear / restart |
 | `windowIndex` | `GET /app/panels?windowIndex=` | int ≥ 0, positional | Out-of-range → empty tree (window ids are not durable yet) |

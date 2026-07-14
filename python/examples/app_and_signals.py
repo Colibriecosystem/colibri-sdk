@@ -27,7 +27,7 @@ last = float(client.book(EXCHANGE, SYMBOL)["lastPrice"])
 level = client.create_signal_level(EXCHANGE, SYMBOL, price=f"{last * 1.02:.2f}", direction="above", note="breakout watch", one_shot=True)
 print("\ncreated level:", level["id"], "@", level["price"], "triggered:", level["isTriggered"])
 
-# GET /signal-levels?exchange=&symbol=  (a connectionId filter is available too)
+# GET /signal-levels?exchange=&symbol=
 print("levels now:", [f"{l['price']} ({l['direction']})" for l in client.signal_levels(EXCHANGE, SYMBOL)])
 
 # DELETE /signal-levels/{id}

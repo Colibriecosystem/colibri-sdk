@@ -226,11 +226,9 @@ class ColibriClient:
         return self._req("POST", "/signals", {"exchange": exchange, "symbol": symbol, "text": text})
 
     # ── signal levels ────────────────────────────────────────────────────────
-    def signal_levels(
-        self, exchange: str | None = None, symbol: str | None = None, connection_id: str | None = None
-    ) -> list[dict]:
-        """GET /signal-levels — filter by venue / symbol / owning connection."""
-        return self._req("GET", "/signal-levels" + self._qs(exchange=exchange, symbol=symbol, connectionId=connection_id))["levels"]
+    def signal_levels(self, exchange: str | None = None, symbol: str | None = None) -> list[dict]:
+        """GET /signal-levels — filter by venue / symbol."""
+        return self._req("GET", "/signal-levels" + self._qs(exchange=exchange, symbol=symbol))["levels"]
 
     def create_signal_level(
         self,
@@ -240,11 +238,10 @@ class ColibriClient:
         direction: str = "cross",
         note: str | None = None,
         one_shot: bool = False,
-        connection_id: str | None = None,
     ) -> dict:
         """POST /signal-levels -> 201. A level fires at most once: one_shot removes it on fire, else it
-        is kept marked isTriggered (sweep with delete_triggered_signal_levels). connection_id
-        optionally ties the level to a connection (organizational — no trading grant needed)."""
+        is kept marked isTriggered (sweep with delete_triggered_signal_levels). A level is a pure
+        market alert — venue + symbol only, never tied to a connection."""
         body = {
             "exchange": exchange,
             "symbol": symbol,
@@ -252,7 +249,6 @@ class ColibriClient:
             "direction": direction,
             "note": note,
             "oneShot": one_shot,
-            "connectionId": connection_id,
         }
         return self._req("POST", "/signal-levels", {k: v for k, v in body.items() if v is not None})
 

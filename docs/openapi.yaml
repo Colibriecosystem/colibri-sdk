@@ -872,7 +872,7 @@ paths:
       operationId: listSignalLevels
       tags: [Signal levels]
       summary: List signal levels
-      description: The API-owned price-alert set, optionally filtered by venue, symbol, and owning connection.
+      description: The API-owned price-alert set, optionally filtered by venue and symbol.
       parameters:
         - name: exchange
           in: query
@@ -884,12 +884,6 @@ paths:
           in: query
           required: false
           description: Filter by symbol.
-          schema:
-            type: string
-        - name: connectionId
-          in: query
-          required: false
-          description: Filter by owning connection.
           schema:
             type: string
       responses:
@@ -912,9 +906,8 @@ paths:
         it, raising a terminal notification + a WS `signalLevels` event. Durable across restarts.
         Lifecycle: a level fires **at most once**. `oneShot: true` → the level is REMOVED after it
         fires; `oneShot: false` (default) → a fired level is KEPT, marked `isTriggered` +
-        `triggeredMs` (an audit row — sweep via `DELETE /signal-levels/triggered`). `connectionId`
-        optionally ties the level to a connection (must exist; organizational only — the fire path
-        is account-agnostic, so no trading grant is needed).
+        `triggeredMs` (an audit row — sweep via `DELETE /signal-levels/triggered`). A level is a
+        pure market alert — venue + symbol only, never tied to a connection.
       requestBody:
         required: true
         content:
@@ -932,8 +925,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/UnknownConnection"
     delete:
       operationId: deleteSignalLevelsBySymbol
       tags: [Signal levels]
@@ -970,8 +961,8 @@ paths:
       tags: [Signal levels]
       summary: Sweep every fired level
       description: >-
-        Remove every level that has fired (`isTriggered: true`) — all venues, symbols, and
-        connections. The cleanup companion of the keep-when-fired default.
+        Remove every level that has fired (`isTriggered: true`) — all venues and symbols.
+        The cleanup companion of the keep-when-fired default.
       responses:
         "200":
           description: How many levels were removed.
@@ -1891,7 +1882,7 @@ components:
         One API-owned price alert. Fires at most once; a fired non-one-shot level is KEPT with
         `isTriggered: true` + `triggeredMs` (sweep via `DELETE /signal-levels/triggered`), a
         one-shot level auto-removes on fire.
-      required: [id, exchange, symbol, price, direction, note, oneShot, createdMs, connectionId, isTriggered, triggeredMs]
+      required: [id, exchange, symbol, price, direction, note, oneShot, createdMs, isTriggered, triggeredMs]
       properties:
         id:
           type: string
@@ -1919,11 +1910,6 @@ components:
           type: integer
           format: int64
           description: Creation time, unix ms.
-        connectionId:
-          type:
-            - string
-            - "null"
-          description: The optional owning connection (organizational — the fire path is account-agnostic).
         isTriggered:
           type: boolean
           description: true once the level has fired (non-one-shot levels only).
@@ -1967,9 +1953,6 @@ components:
           type: boolean
           default: false
           description: true = remove the level after it fires; false = keep it, marked triggered.
-        connectionId:
-          type: string
-          description: Optional owning connection (must exist; no trading grant needed — a level moves no money).
 
     SignalLevelRemoved:
       type: object
