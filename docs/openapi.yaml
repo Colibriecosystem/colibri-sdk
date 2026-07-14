@@ -491,11 +491,11 @@ paths:
     delete:
       operationId: cancelOrders
       tags: [Trading]
-      summary: Bulk-cancel orders on the connection
+      summary: Cancel every order on the connection
       description: >-
-        Bulk cancel on one connection. With `?symbol=` — every working order for that symbol;
-        without — every order across ALL of the account's symbols (the account-wide sweep).
-        Positions are untouched. **Grant-gated.** Answers `202` (enqueued).
+        With `?symbol=` — every working order for that symbol; without — every order across ALL
+        of the account's symbols. Positions are untouched. **Grant-gated.** Answers `202`
+        (enqueued).
       parameters:
         - $ref: "#/components/parameters/connectionIdPath"
         - name: symbol
