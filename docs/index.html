@@ -24,6 +24,7 @@
   The WebSocket /stream protocol is documented separately (OpenAPI cannot model it):
   see ./ws.html (AsyncAPI).
 -->
+<script src="./theme.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@stoplight/elements@9/web-components.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stoplight/elements@9/styles.min.css" />
 <style>
@@ -50,6 +51,14 @@
   .cfg input#cfg-token { width: 170px; }
   .cfg .ok { color: #46c07a; font-size: 12px; min-width: 14px; }
   #docs { height: calc(100% - 45px); }
+  .theme-btn {
+    background: none; border: 1px solid #2c3650; border-radius: 4px; color: #9fb0d0;
+    font-size: 14px; line-height: 1; padding: 4px 8px; cursor: pointer;
+  }
+  .theme-btn:hover { color: #fff; border-color: #4f7cff; }
+  /* Stoplight Elements ships a full dark palette keyed off html[data-theme="dark"];
+     the page body just has to match its dark canvas. */
+  html[data-theme="dark"] body { background: #090c11; }
 </style>
 </head>
 <body>
@@ -65,6 +74,7 @@
     <span class="ok" id="cfg-ok"></span>
   </span>
   <a class="right" href="https://github.com/Colibriecosystem/colibri-sdk">SDKs on GitHub</a>
+  <button id="theme-toggle" class="theme-btn" type="button" title="Switch theme">🌙</button>
 </nav>
 <div id="docs">
   <elements-api

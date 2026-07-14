@@ -11,6 +11,7 @@
   @asyncapi/html-template) from ./asyncapi.yaml. OpenAPI cannot model WebSockets,
   so the /stream protocol lives in its own AsyncAPI document.
 -->
+<script src="./theme.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@asyncapi/react-component@3/styles/default.min.css" />
 <style>
   html, body { margin: 0; }
@@ -28,6 +29,24 @@
   .topbar .right { margin-left: auto; }
   #asyncapi { max-width: 1400px; margin: 0 auto; }
   .loading { padding: 40px; font: 15px -apple-system, "Segoe UI", Roboto, sans-serif; color: #555; }
+  .theme-btn {
+    background: none; border: 1px solid #2c3650; border-radius: 4px; color: #9fb0d0;
+    font-size: 14px; line-height: 1; padding: 4px 8px; cursor: pointer;
+  }
+  .theme-btn:hover { color: #fff; border-color: #4f7cff; }
+  /* The AsyncAPI component ships light-only CSS, so dark mode is a tuned inversion:
+     the whole tree flips, then code samples + images flip BACK so they keep their
+     original (already dark) colors. Class-agnostic — survives component updates. */
+  html[data-theme="dark"] body { background: #10151f; }
+  html[data-theme="dark"] #asyncapi {
+    background: #fff;
+    filter: invert(90%) hue-rotate(180deg);
+  }
+  html[data-theme="dark"] #asyncapi pre,
+  html[data-theme="dark"] #asyncapi img,
+  html[data-theme="dark"] #asyncapi svg {
+    filter: invert(100%) hue-rotate(180deg);
+  }
 </style>
 </head>
 <body>
@@ -36,6 +55,7 @@
   <a href="./index.html">REST</a>
   <a class="active" href="./ws.html">WebSocket</a>
   <a class="right" href="https://github.com/Colibriecosystem/colibri-sdk">SDKs on GitHub</a>
+  <button id="theme-toggle" class="theme-btn" type="button" title="Switch theme">🌙</button>
 </nav>
 <div id="asyncapi"><div class="loading">Loading the WebSocket reference…</div></div>
 <script src="https://cdn.jsdelivr.net/npm/@asyncapi/react-component@3/browser/standalone/index.js"></script>
