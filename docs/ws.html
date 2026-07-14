@@ -40,13 +40,21 @@
 <div id="asyncapi"><div class="loading">Loading the WebSocket reference…</div></div>
 <script src="https://cdn.jsdelivr.net/npm/@asyncapi/react-component@3/browser/standalone/index.js"></script>
 <script>
-  AsyncApiStandalone.render(
-    {
-      schema: { url: "./asyncapi.yaml" },
-      config: { show: { sidebar: true, errors: true } },
-    },
-    document.getElementById("asyncapi"),
-  );
+  // Reuse the port saved on the REST page (topbar Port field, localStorage) so
+  // the displayed ws:// server URL matches the user's actual terminal port.
+  (async () => {
+    const DEFAULT_PORT = "18845";
+    const saved = (localStorage.getItem("colibri.port") || "").trim();
+    const port = /^\d{2,5}$/.test(saved) ? saved : DEFAULT_PORT;
+    const yaml = await (await fetch("./asyncapi.yaml")).text();
+    AsyncApiStandalone.render(
+      {
+        schema: yaml.replaceAll("ws://127.0.0.1:" + DEFAULT_PORT, "ws://127.0.0.1:" + port),
+        config: { show: { sidebar: true, errors: true } },
+      },
+      document.getElementById("asyncapi"),
+    );
+  })();
 </script>
 <script src="./copy-enhancer.js"></script>
 </body>

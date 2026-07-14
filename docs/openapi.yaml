@@ -8,11 +8,6 @@ info:
     trades, drive the terminal's panels, and trade — talking to a **running Colibri terminal** over
     `127.0.0.1`. Exchange keys never leave the terminal; the process boundary isolates them.
 
-    > This documents the current pre-release surface (the 2026-07 RESTful redesign: resources nest
-    > under their owner — a venue's data under `/exchanges/{exchange}` and
-    > `/markets/{exchange}/{symbol}`, an account's data + trading under `/connections/{id}`).
-    > The discovery file / `GET /ping` report `apiVersion: 1`.
-
     ## Connecting
 
     1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access

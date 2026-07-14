@@ -11,9 +11,15 @@
   the single source of truth for the API surface. Elements gives the ReDoc-style
   three-panel layout WITH an inline "Try It" console (no separate client dialog).
 
-  NOTE: "Try It" talks to http://127.0.0.1:<port> of YOUR running terminal.
-  Browser requests carry an Origin header, so tick "Allow web browser access" in
-  Settings -> Program -> Local API, and paste your bearer token into the Auth field.
+  GLOBAL PORT + TOKEN (topbar, saved in localStorage on this machine):
+  - Port rewrites the spec's server URL before rendering, so every displayed URL,
+    request sample, and "Try It" call targets http://127.0.0.1:<port>.
+  - Token is auto-attached as "Authorization: Bearer <token>" to every Try It
+    request via a fetch interceptor; a token typed into an operation's own auth
+    field takes precedence. Nothing is ever sent anywhere but 127.0.0.1.
+
+  NOTE: "Try It" talks to YOUR running terminal — tick "Allow web browser access"
+  in Settings -> Program -> Local API (browser requests carry an Origin header).
 
   The WebSocket /stream protocol is documented separately (OpenAPI cannot model it):
   see ./ws.html (AsyncAPI).
@@ -34,6 +40,15 @@
   .topbar a:hover { color: #fff; }
   .topbar a.active { color: #fff; border-bottom: 2px solid #4f7cff; }
   .topbar .right { margin-left: auto; }
+  .cfg { display: flex; align-items: center; gap: 6px; color: #9fb0d0; font-size: 12.5px; }
+  .cfg input {
+    background: #1a2233; color: #e6e9f0; border: 1px solid #2c3650; border-radius: 4px;
+    padding: 4px 8px; font: 500 12.5px/1 ui-monospace, Consolas, monospace; outline: none;
+  }
+  .cfg input:focus { border-color: #4f7cff; }
+  .cfg input#cfg-port { width: 58px; }
+  .cfg input#cfg-token { width: 170px; }
+  .cfg .ok { color: #46c07a; font-size: 12px; min-width: 14px; }
   #docs { height: calc(100% - 45px); }
 </style>
 </head>
@@ -42,17 +57,95 @@
   <img src="./favicon.png" alt="" /><span class="brand">Colibri Local API</span>
   <a class="active" href="./index.html">REST</a>
   <a href="./ws.html">WebSocket</a>
+  <span class="cfg" title="Your terminal's Local API port (Settings → Program → Local API). Rewrites every URL + Try It target.">
+    Port <input id="cfg-port" type="text" inputmode="numeric" placeholder="18845" />
+  </span>
+  <span class="cfg" title="Your access token — auto-attached as 'Authorization: Bearer …' to every Try It request. Stored only in this browser's localStorage; requests go only to 127.0.0.1.">
+    Token <input id="cfg-token" type="password" placeholder="paste once — applies to Try It" />
+    <span class="ok" id="cfg-ok"></span>
+  </span>
   <a class="right" href="https://github.com/Colibriecosystem/colibri-sdk">SDKs on GitHub</a>
 </nav>
 <div id="docs">
   <elements-api
-    apiDescriptionUrl="./openapi.yaml"
     router="hash"
     layout="responsive"
     logo="./favicon.png"
     tryItCredentialsPolicy="omit"
   ></elements-api>
 </div>
+<script>
+(() => {
+  "use strict";
+  const DEFAULT_PORT = "18845";
+  const portInput = document.getElementById("cfg-port");
+  const tokenInput = document.getElementById("cfg-token");
+  const okBadge = document.getElementById("cfg-ok");
+  portInput.value = localStorage.getItem("colibri.port") || "";
+  tokenInput.value = localStorage.getItem("colibri.token") || "";
+
+  const port = () => (portInput.value.trim().match(/^\d{2,5}$/) ? portInput.value.trim() : DEFAULT_PORT);
+  const token = () => tokenInput.value.trim();
+
+  // Load the spec ourselves and rewrite the server port BEFORE Elements renders,
+  // so the docs, request samples, and Try It all target the configured port.
+  const el = document.querySelector("elements-api");
+  let specText = null;
+  async function applySpec() {
+    if (specText === null) {
+      specText = await (await fetch("./openapi.yaml")).text();
+    }
+    el.apiDescriptionDocument = specText.replaceAll(
+      "http://127.0.0.1:" + DEFAULT_PORT,
+      "http://127.0.0.1:" + port(),
+    );
+  }
+  applySpec();
+
+  let debounce = 0;
+  const flashOk = () => {
+    okBadge.textContent = "✓";
+    setTimeout(() => (okBadge.textContent = ""), 900);
+  };
+  portInput.addEventListener("input", () => {
+    localStorage.setItem("colibri.port", portInput.value.trim());
+    clearTimeout(debounce);
+    debounce = setTimeout(() => { applySpec(); flashOk(); }, 400);
+  });
+  tokenInput.addEventListener("input", () => {
+    localStorage.setItem("colibri.token", tokenInput.value.trim());
+    flashOk();
+  });
+
+  // Attach the saved token to every Try It request that goes to the loopback API
+  // and doesn't already carry an Authorization header (an explicitly typed
+  // per-request token wins). Loopback-only by construction.
+  const origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      const url = typeof input === "string" ? input : input.url;
+      const t = token();
+      if (t && /^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+        if (input instanceof Request) {
+          const h = new Headers(input.headers);
+          if (!h.get("authorization")) {
+            h.set("Authorization", "Bearer " + t);
+            input = new Request(input, { headers: h });
+          }
+        } else {
+          init = init || {};
+          const h = new Headers(init.headers || {});
+          if (!h.get("authorization")) {
+            h.set("Authorization", "Bearer " + t);
+            init.headers = h;
+          }
+        }
+      }
+    } catch { /* never break a request over the convenience header */ }
+    return origFetch.call(this, input, init);
+  };
+})();
+</script>
 <script src="./copy-enhancer.js"></script>
 </body>
 </html>
