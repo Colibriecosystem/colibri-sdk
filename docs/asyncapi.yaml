@@ -212,7 +212,7 @@ components:
                     price: { type: string, description: Decimal string. }
                     qty: { type: string, description: Base-coin quantity (decimal string). }
                     isBuy: { type: boolean, description: true = buyer-aggressor. }
-                    timeMs: { type: integer, format: int64, description: Exchange time, unix ms. }
+                    timeMs: { type: integer, format: int64, description: "Exchange time, unix ms." }
       examples:
         - payload:
             type: trades
@@ -398,8 +398,8 @@ components:
       required: [price, baseQty, usdVolume]
       properties:
         price: { type: string, description: Level price (decimal string). }
-        baseQty: { type: string, description: Resting quantity, base units (decimal string). }
-        usdVolume: { type: string, description: Resting volume, USD (decimal string). }
+        baseQty: { type: string, description: "Resting quantity, base units (decimal string)." }
+        usdVolume: { type: string, description: "Resting volume, USD (decimal string)." }
 
     Book:
       type: object
@@ -430,7 +430,7 @@ components:
       properties:
         exchange: { type: string }
         symbol: { type: string }
-        rate: { type: string, description: Funding rate, decimal string ("0.0001" = 0.01%). }
+        rate: { type: string, description: 'Funding rate, decimal string ("0.0001" = 0.01%).' }
         nextFundingTimeMs: { type: integer, format: int64 }
 
     PositionsData:
@@ -468,8 +468,8 @@ components:
               symbol: { type: string }
               exchange: { type: string }
               side: { type: string, description: "`BUY` / `SELL`." }
-              type: { type: string, description: Order type name (`Limit`, `Market`, `StopLoss`, …). }
-              status: { type: string, description: Order status name (`New`, `PartiallyFilled`, …). }
+              type: { type: string, description: "Order type name (`Limit`, `Market`, `StopLoss`, …)." }
+              status: { type: string, description: "Order status name (`New`, `PartiallyFilled`, …)." }
               price: { type: string }
               quantity: { type: string, description: Base units. }
               filledQuantity: { type: string, description: Base units. }
