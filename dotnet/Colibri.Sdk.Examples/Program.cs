@@ -11,7 +11,7 @@ using var client = ColibriClient.Discover(); // reads %APPDATA%\Colibri\localapi
 
 // ── discovery ────────────────────────────────────────────────────────────────
 var ping = await client.PingAsync();
-Console.WriteLine($"Connected to {ping.Name} {ping.Version} (API {ping.ApiVersion})\n");
+Console.WriteLine($"Connected to {ping.Name} {ping.Version} (API {ping.ApiVersion}, port {ping.Port})\n");
 
 // ── connections ──────────────────────────────────────────────────────────────
 var connections = await client.ConnectionsAsync();
@@ -22,11 +22,17 @@ foreach (var c in connections)
 }
 
 // ── market data ────────────────────────────────────────────────────────────────
+var venues = await client.ExchangesAsync();
+Console.WriteLine($"\nvenues: {string.Join(", ", venues.Take(5).Select(v => v.Id))} …");
+
 var symbols = await client.SymbolsAsync(exchange);
-Console.WriteLine($"\n{exchange}: {symbols.Count} symbols");
+Console.WriteLine($"{exchange}: {symbols.Count} symbols");
 
 var book = await client.BookAsync(exchange, symbol, depth: 10);
 Console.WriteLine($"{symbol}  last={book.LastPrice}  bid={book.BestBid}  ask={book.BestAsk}");
+
+var clusters = await client.ClustersAsync(exchange, symbol, limit: 30);
+Console.WriteLine($"clusters: {clusters.Buckets.Count} one-minute buckets");
 
 try
 {
@@ -45,29 +51,45 @@ if (connections.Count > 0)
 }
 
 // ── app bridge + signals ───────────────────────────────────────────────────────
-await client.OpenSymbolAsync(exchange, symbol);
+await client.OpenSymbolAsync(exchange, symbol); // add a panel + surface the window
 await client.NotifyAsync("Hello from the C# SDK", source: "example");
 await client.SignalAsync(exchange, symbol, "whale wall pulled");
 Console.WriteLine("\nopened symbol + posted a toast + a signal");
+
+// ── signal levels ──────────────────────────────────────────────────────────────
+if (book.BestBid is not null)
+{
+    var level = await client.CreateSignalLevelAsync(
+        exchange, symbol, (decimal.Parse(book.BestBid) * 1.02m).ToString("F2"), direction: "above", note: "breakout watch");
+    Console.WriteLine($"signal level {level.Id} @ {level.Price} (triggered={level.IsTriggered})");
+    await client.DeleteSignalLevelAsync(level.Id);
+    var sweep = await client.DeleteTriggeredSignalLevelsAsync();
+    Console.WriteLine($"swept {sweep.Removed} fired level(s)");
+}
 
 // ── trading (grant-gated; only with --arm) ─────────────────────────────────────
 var granted = connections.FirstOrDefault(c => c.ApiTradingEnabled);
 if (granted is not null && armed && book.BestBid is not null)
 {
     var restPrice = (decimal.Parse(book.BestBid) * 0.5m).ToString("F2"); // far from market → rests
-    var placed = await client.PlaceOrderAsync(new PlaceOrderRequest
+    var placed = await client.PlaceOrderAsync(granted.Id, new PlaceOrderRequest
     {
-        ConnectionId = granted.Id,
-        Exchange = exchange,
         Symbol = symbol,
         Side = "BUY",
-        Type = "LIMIT",
+        Type = "Limit",
         Price = restPrice,
         SizeQuote = "10",
     });
     Console.WriteLine($"\nplaced {placed.ClientOrderId} ({placed.Status})");
-    await client.CancelOrderAsync(placed.ClientOrderId, granted.Id);
+    await client.CancelOrderAsync(granted.Id, placed.ClientOrderId, symbol);
     Console.WriteLine("cancelled");
+
+    // Bulk scopes (kept commented — they act on the whole account / every granted account):
+    // await client.CancelOrdersAsync(granted.Id, symbol);   // one symbol
+    // await client.CancelOrdersAsync(granted.Id);           // the whole account
+    // await client.ClosePositionsAsync(granted.Id);         // close every position on the account
+    // await client.CancelAllOrdersAsync();                  // EVERY granted account
+    // await client.CloseAllPositionsAsync();                // EVERY granted account (super-panic)
 }
 else if (granted is not null)
 {
@@ -78,8 +100,8 @@ else if (granted is not null)
 await using var ws = client.Stream();
 ws.On("book", f => Console.WriteLine($"[book] {f.Data.GetProperty("bestBid")} / {f.Data.GetProperty("bestAsk")}"));
 ws.On("trades", f => Console.WriteLine($"[trades] {f.Data.GetProperty("trades").GetArrayLength()} prints"));
-ws.On("notifications", f => Console.WriteLine($"[notification] {f.Data}"));
-ws.On("signalLevels", f => Console.WriteLine($"[signalLevel] {f.Event}"));
+ws.On("notification", f => Console.WriteLine($"[notification] {f.Data}"));
+ws.On("signalLevel", f => Console.WriteLine($"[signalLevel] {f.Event}"));
 ws.On("error", f => Console.WriteLine($"[error] {f.Data}"));
 
 await ws.ConnectAsync();

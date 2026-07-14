@@ -4,7 +4,10 @@
 export interface Ping {
   name: string;
   version: string;
-  apiVersion: string;
+  /** The Local API protocol version (currently 1). */
+  apiVersion: number;
+  /** The live bound port (useful when the preferred port was taken). */
+  port: number;
 }
 
 export interface BookLevel {
@@ -32,8 +35,14 @@ export interface ClusterLevel {
   sellBase: string;
 }
 
+/** One 1-minute footprint bucket (the client merges buckets into coarser timeframes itself). */
 export interface Cluster {
-  startMs: number;
+  /** Bucket start time, unix SECONDS. */
+  startUnixSec: number;
+  totalBuyUsd: string;
+  totalSellUsd: string;
+  totalBuyBase: string;
+  totalSellBase: string;
   levels: ClusterLevel[];
 }
 
@@ -41,6 +50,7 @@ export interface Clusters {
   exchange: string;
   symbol: string;
   tickSize: string;
+  /** Raw 1-minute buckets, oldest → newest. */
   buckets: Cluster[];
 }
 
@@ -98,16 +108,16 @@ export interface Balance {
 }
 
 export type Side = "BUY" | "SELL";
-export type OrderType = "LIMIT" | "MARKET";
+export type OrderType = "Limit" | "Market";
 
 /**
- * A place-order request. Give EITHER {@link sizeQuote} (spend N quote / USDT) OR {@link sizeBase}
- * (N coins). `price` is required for LIMIT and omitted for MARKET. `reduceOnly` closes a position.
- * The order routes through the SAME path a terminal click uses (per-connection trading grant required).
+ * A place-order request (`POST /connections/{id}/orders`). The connection — and therefore the
+ * venue — is the URL, so the body carries neither. Give EITHER {@link sizeQuote} (spend N quote /
+ * USDT) OR {@link sizeBase} (N coins). `price` is required for Limit and must be ABSENT for
+ * Market. `reduceOnly` closes a position. The order routes through the SAME path a terminal click
+ * uses (per-connection trading grant required).
  */
 export interface PlaceOrder {
-  connectionId: string;
-  exchange: string;
   symbol: string;
   side: Side;
   type: OrderType;
@@ -122,17 +132,37 @@ export interface OrderAccepted {
   status: string;
 }
 
+/** All-granted sweep result (`DELETE /orders` / `DELETE /positions`). */
+export interface SweepResult {
+  status: string;
+  /** How many granted accounts the action was dispatched to. */
+  accounts: number;
+}
+
+/** Request direction values; responses echo the enum NAME (`"Above"` / `"Below"` / `"Cross"`). */
 export type SignalDirection = "above" | "below" | "cross";
 
+/**
+ * One API-owned price alert. Lifecycle: a level fires AT MOST ONCE. `oneShot: true` → removed
+ * after firing; `oneShot: false` (default) → kept, marked `isTriggered` + `triggeredMs` (sweep
+ * them with `DELETE /signal-levels/triggered`).
+ */
 export interface SignalLevel {
   id: string;
   exchange: string;
   symbol: string;
   price: string;
-  direction: SignalDirection;
+  /** Enum name: "Above" | "Below" | "Cross". */
+  direction: string;
   note: string | null;
   oneShot: boolean;
   createdMs: number;
+  /** The optional owning connection (organizational — the fire path is account-agnostic). */
+  connectionId: string | null;
+  /** true once the level has fired (non-one-shot levels only). */
+  isTriggered: boolean;
+  /** Fire time, unix ms; null while untriggered. */
+  triggeredMs: number | null;
 }
 
 export interface TradePush {
@@ -140,6 +170,31 @@ export interface TradePush {
   qty: string;
   isBuy: boolean;
   timeMs: number;
+}
+
+/**
+ * The curated orderbook-settings slice (exchange tier of the terminal's settings cascade).
+ * GET returns every field set (effective values); PATCH takes any subset — only the fields
+ * present change. Decimals are strings; enums are their names.
+ */
+export interface OrderbookSettings {
+  sizeUnit?: string | null;
+  depthUnit?: string | null;
+  minTradeUsd?: number | null;
+  minTradeBase?: string | null;
+  tickWindowMs?: number | null;
+  volumeBarThresholdUsd?: number | null;
+  largeVolumeUsd?: number | null;
+  largeVolume2Usd?: number | null;
+  clusterFillThresholdUsd?: number | null;
+  aggregationMode?: string | null;
+  aggregationDefaultValue?: string | null;
+  showTicks?: boolean | null;
+  showLiquidations?: boolean | null;
+  stopLossPercent?: string | null;
+  ocoEnabled?: boolean | null;
+  ocoTakeProfitPercent?: string | null;
+  ocoStopLossPercent?: string | null;
 }
 
 // ── Slot control (/app/panels) ────────────────────────────────────────────────
@@ -228,8 +283,8 @@ export interface SubscribeParams {
   exchange?: string;
   symbol?: string;
   connectionId?: string;
-  /** Snapshot channels (book/clusters): desired frames per second; the server caps it. */
+  /** `book`: desired frames per second (server-capped at 10). */
   hz?: number;
+  /** `book`: levels per side (server-capped at 500). */
   depth?: number;
-  limit?: number;
 }

@@ -5,11 +5,12 @@ import { ColibriClient } from "../src/index.js";
 const client = await ColibriClient.discover();
 const [EXCHANGE, SYMBOL] = ["BinanceSpot", "BTCUSDT"];
 
-// POST /app/open-symbol  — open ONE coin on its venue ("see the move → open the book")
+// openSymbol — open ONE coin + surface the window ("see the move → open the book").
+// A POST /app/panels {activate:true} under the hood — returns the created slot.
 console.log("open-symbol:", await client.openSymbol(EXCHANGE, SYMBOL));
 
-// POST /app/open-combo  — fan the coin across every connection that lists it
-console.log("open-combo:", await client.openCombo(SYMBOL, "window"));
+// POST /app/combos  — fan the coin across every connection that lists it
+console.log("combo:", await client.openCombo(SYMBOL, "window"));
 
 // POST /notifications  — raise a toast in the terminal
 console.log("notify:", await client.notify("Hello from a widget 👋", "info", "my-widget"));
@@ -20,7 +21,8 @@ console.log("signal:", await client.signal(EXCHANGE, SYMBOL, "whale wall pulled"
 // Signal levels — API-owned price alerts, ALSO drawn on the ladder.
 const last = Number((await client.book(EXCHANGE, SYMBOL)).lastPrice);
 
-// POST /signal-levels  → 201
+// POST /signal-levels  → 201. A level fires AT MOST ONCE: oneShot removes it on fire, otherwise
+// it is kept marked isTriggered (sweep those with deleteTriggeredSignalLevels()).
 const level = await client.createSignalLevel({
   exchange: EXCHANGE,
   symbol: SYMBOL,
@@ -29,11 +31,13 @@ const level = await client.createSignalLevel({
   note: "breakout watch",
   oneShot: true,
 });
-console.log("\ncreated level:", level.id, "@", level.price);
+console.log("\ncreated level:", level.id, "@", level.price, "triggered:", level.isTriggered);
 
-// GET /signal-levels?exchange=&symbol=
+// GET /signal-levels?exchange=&symbol=  (a connectionId filter is available too)
 console.log("levels now:", (await client.signalLevels(EXCHANGE, SYMBOL)).map((l) => `${l.price} (${l.direction})`));
 
 // DELETE /signal-levels/{id}
-await client.deleteSignalLevel(level.id);
-console.log("deleted", level.id);
+console.log("deleted:", await client.deleteSignalLevel(level.id));
+
+// DELETE /signal-levels/triggered  — sweep every already-fired level
+console.log("swept fired levels:", await client.deleteTriggeredSignalLevels());

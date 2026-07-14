@@ -20,10 +20,12 @@ ws.on("positions", (d) => console.log("[positions]", d));
 ws.on("orders", (d) => console.log("[orders]", d));
 ws.on("balance", (d) => console.log("[balance]", d));
 
-// App-wide channels — no key.
-ws.on("notifications", (d) => console.log("[notification]", d));
-ws.on("signalLevels", (d, f) => console.log("[signalLevel]", f.event, d));
+// App-wide channels — no key. NB the pushed frame types are SINGULAR
+// ("notification" / "signalLevel") even though the subscribed channels are plural.
+ws.on("notification", (d) => console.log("[notification]", d));
+ws.on("signalLevel", (d, f) => console.log("[signalLevel]", f.event, d));
 
+ws.on("subscribed", (d) => console.log("[subscribed]", d));
 ws.on("error", (e) => console.error("[error]", e));
 
 await ws.connect();

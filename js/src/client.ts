@@ -8,6 +8,7 @@ import type {
   Funding,
   Order,
   OrderAccepted,
+  OrderbookSettings,
   PanelActionResult,
   PanelContent,
   PanelWindow,
@@ -16,6 +17,7 @@ import type {
   Position,
   SignalDirection,
   SignalLevel,
+  SweepResult,
   SymbolInfo,
 } from "./types.js";
 
@@ -80,14 +82,14 @@ export class ColibriClient {
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
     if (!res.ok) {
-      const err = (data && data.error) || {};
-      throw new ColibriError(res.status, err.code ?? `http_${res.status}`, err.message ?? text);
+      // Error bodies are a top-level { code, message }.
+      throw new ColibriError(res.status, data?.code ?? `http_${res.status}`, data?.message ?? text);
     }
     return data as T;
   }
 
   // ── discovery ────────────────────────────────────────────────────────────
-  /** Liveness + version. The ONE token-free route. */
+  /** Liveness + version + the live bound port. The ONE token-free route. */
   ping(): Promise<Ping> {
     return this.req("GET", "/ping");
   }
@@ -105,70 +107,100 @@ export class ColibriClient {
   exchanges(): Promise<ExchangeInfo[]> {
     return this.req<{ exchanges: ExchangeInfo[] }>("GET", "/exchanges").then((r) => r.exchanges);
   }
+  /** GET /exchanges/{exchange}/symbols — the venue's symbol universe. */
   symbols(exchange: string): Promise<SymbolInfo[]> {
-    return this.req<{ symbols: SymbolInfo[] }>("GET", `/symbols?exchange=${enc(exchange)}`).then((r) => r.symbols);
+    return this.req<{ symbols: SymbolInfo[] }>("GET", `/exchanges/${enc(exchange)}/symbols`).then((r) => r.symbols);
   }
-  book(exchange: string, symbol: string, opts: { depth?: number; aggregation?: number } = {}): Promise<Book> {
-    const q = new URLSearchParams();
-    if (opts.depth != null) q.set("depth", String(opts.depth));
-    if (opts.aggregation != null) q.set("aggregation", String(opts.aggregation));
-    const qs = q.toString();
-    return this.req("GET", `/book/${enc(exchange)}/${enc(symbol)}${qs ? "?" + qs : ""}`);
+  /** GET /markets/{exchange}/{symbol}/book — dual-unit snapshot; `depth` = levels per side (1–500, default 50). */
+  book(exchange: string, symbol: string, opts: { depth?: number } = {}): Promise<Book> {
+    const qs = opts.depth != null ? `?depth=${opts.depth}` : "";
+    return this.req("GET", `/markets/${enc(exchange)}/${enc(symbol)}/book${qs}`);
   }
-  clusters(exchange: string, symbol: string, timeframe?: string): Promise<Clusters> {
-    return this.req("GET", `/clusters/${enc(exchange)}/${enc(symbol)}${timeframe ? "?timeframe=" + enc(timeframe) : ""}`);
+  /** GET /markets/{exchange}/{symbol}/clusters — raw 1-minute buckets (merge timeframes yourself); `limit` 1–4320. */
+  clusters(exchange: string, symbol: string, limit?: number): Promise<Clusters> {
+    const qs = limit != null ? `?limit=${limit}` : "";
+    return this.req("GET", `/markets/${enc(exchange)}/${enc(symbol)}/clusters${qs}`);
   }
+  /** GET /markets/{exchange}/{symbol}/funding — perps only (spot answers 404 `unavailable`). */
   funding(exchange: string, symbol: string): Promise<Funding> {
-    return this.req("GET", `/funding/${enc(exchange)}/${enc(symbol)}`);
+    return this.req("GET", `/markets/${enc(exchange)}/${enc(symbol)}/funding`);
   }
 
-  // ── account ──────────────────────────────────────────────────────────────
+  // ── orderbook settings (exchange tier) ────────────────────────────────────
+  /** GET /exchanges/{exchange}/orderbook-settings — the EFFECTIVE render settings for the venue. */
+  orderbookSettings(exchange: string): Promise<{ exchange: string; settings: OrderbookSettings }> {
+    return this.req("GET", `/exchanges/${enc(exchange)}/orderbook-settings`);
+  }
+  /** PATCH /exchanges/{exchange}/orderbook-settings — partial update: only the fields present change. */
+  patchOrderbookSettings(exchange: string, patch: OrderbookSettings): Promise<{ exchange: string; settings: OrderbookSettings }> {
+    return this.req("PATCH", `/exchanges/${enc(exchange)}/orderbook-settings`, patch);
+  }
+
+  // ── account (per connection) ──────────────────────────────────────────────
   positions(connectionId: string): Promise<Position[]> {
-    return this.req<{ positions: Position[] }>("GET", `/positions?connectionId=${enc(connectionId)}`).then((r) => r.positions);
+    return this.req<{ positions: Position[] }>("GET", `/connections/${enc(connectionId)}/positions`).then((r) => r.positions);
   }
   orders(connectionId: string): Promise<Order[]> {
-    return this.req<{ orders: Order[] }>("GET", `/orders?connectionId=${enc(connectionId)}`).then((r) => r.orders);
+    return this.req<{ orders: Order[] }>("GET", `/connections/${enc(connectionId)}/orders`).then((r) => r.orders);
   }
   balance(connectionId: string): Promise<Balance[]> {
-    return this.req<{ balances: Balance[] }>("GET", `/balance?connectionId=${enc(connectionId)}`).then((r) => r.balances);
+    return this.req<{ balances: Balance[] }>("GET", `/connections/${enc(connectionId)}/balances`).then((r) => r.balances);
   }
 
   // ── trading (per-connection grant required) ──────────────────────────────
-  placeOrder(o: PlaceOrder): Promise<OrderAccepted> {
-    return this.req("POST", "/orders", o);
+  /**
+   * POST /connections/{id}/orders → 202 {clientOrderId, status}. The venue derives from the
+   * connection, so the order body carries only the instrument + shape. Lifecycle then arrives on
+   * the WS `orders` channel.
+   */
+  placeOrder(connectionId: string, order: PlaceOrder): Promise<OrderAccepted> {
+    return this.req("POST", `/connections/${enc(connectionId)}/orders`, order);
   }
-  cancelOrder(clientOrderId: string, connectionId: string): Promise<{ status: string }> {
-    return this.req("DELETE", `/orders/${enc(clientOrderId)}?connectionId=${enc(connectionId)}`);
+  /** DELETE /connections/{id}/orders/{clientOrderId}?symbol= — cancel one order (symbol required). */
+  cancelOrder(connectionId: string, clientOrderId: string, symbol: string): Promise<{ status: string }> {
+    return this.req("DELETE", `/connections/${enc(connectionId)}/orders/${enc(clientOrderId)}?symbol=${enc(symbol)}`);
   }
-  cancelAll(connectionId: string, exchange: string, symbol: string): Promise<{ status: string }> {
-    return this.req("POST", "/orders/cancelAll", { connectionId, exchange, symbol });
+  /**
+   * DELETE /connections/{id}/orders[?symbol=] — bulk cancel on one connection: with `symbol` every
+   * working order for that symbol; without, every order across the whole account (positions untouched).
+   */
+  cancelAll(connectionId: string, symbol?: string): Promise<{ status: string }> {
+    const qs = symbol ? `?symbol=${enc(symbol)}` : "";
+    return this.req("DELETE", `/connections/${enc(connectionId)}/orders${qs}`);
   }
-  /** Account-wide: cancel every order on one (or, if omitted, every granted) account — the terminal's Del hotkey. */
-  cancelAllOrders(connectionId?: string): Promise<{ status: string; accounts: number }> {
-    return this.req("POST", "/orders/cancel-all-orders", { connectionId });
+  /** DELETE /connections/{id}/positions — close every position + cancel leftovers on one connection. */
+  closePositions(connectionId: string): Promise<{ status: string }> {
+    return this.req("DELETE", `/connections/${enc(connectionId)}/positions`);
   }
-  /** Account-wide: flatten every position + cancel leftovers, on one or every granted account — the NumPad0 hotkey. */
-  closeAllPositions(connectionId?: string): Promise<{ status: string; accounts: number }> {
-    return this.req("POST", "/orders/close-all-positions", { connectionId });
+  /** DELETE /orders — emergency sweep: cancel every order on EVERY granted account (the terminal's global cancel-all hotkey scope). */
+  cancelAllOrders(): Promise<SweepResult> {
+    return this.req("DELETE", "/orders");
+  }
+  /** DELETE /positions — emergency sweep: close every position + cancel leftovers on EVERY granted account (the global super-panic scope). */
+  closeAllPositions(): Promise<SweepResult> {
+    return this.req("DELETE", "/positions");
   }
 
   // ── app bridge ───────────────────────────────────────────────────────────
   /**
    * Open ONE coin in the ACTIVE tab + surface the window (the "see the move → open the book"
-   * gesture). A panel add under the hood — same optional `connectionId` (grant-gated) / `views`
-   * (default `["orderbook"]`) semantics — answering 201 with the created slot, so the tool can
-   * keep driving it by its durable id.
+   * gesture). Convenience wrapper over {@link addPanel} with `activate: true` — same optional
+   * `connectionId` (grant-gated) / `views` (default `["orderbook"]`) semantics — answering 201
+   * with the created slot, so the tool can keep driving it by its durable id.
    */
   openSymbol(
     exchange: string,
     symbol: string,
     opts: { connectionId?: string; views?: ("orderbook" | "chart")[] } = {},
   ): Promise<PanelActionResult> {
-    return this.req("POST", "/app/open-symbol", { exchange, symbol, ...opts });
+    return this.addPanel({
+      activate: true,
+      content: { exchange, symbol, views: opts.views ?? ["orderbook"], connectionId: opts.connectionId },
+    });
   }
-  /** Open the coin as a COMBO — one panel per connection that lists it. `target`: "tab" | "window". */
-  openCombo(symbol: string, target: "tab" | "window" = "window"): Promise<{ opened: boolean }> {
-    return this.req("POST", "/app/open-combo", { symbol, target });
+  /** POST /app/combos — open the coin as a COMBO: one panel per connection that lists it. `target`: "tab" | "window". */
+  openCombo(symbol: string, target: "tab" | "window" = "window"): Promise<{ status: string }> {
+    return this.req("POST", "/app/combos", { symbol, target });
   }
 
   // ── panel control (/app/panels) ───────────────────────────────────────────
@@ -189,9 +221,10 @@ export class ColibriClient {
    * Add a panel to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab
    * header's right-click menu). `content` is ONE instrument + its views; omit it to add an EMPTY
    * "+" box instead — reserve now, fill later by its durable id via {@link setPanel} (each empty
-   * add reserves a fresh box).
+   * add reserves a fresh box). `activate: true` surfaces the terminal window afterwards (default
+   * false so a background layout tool never steals focus).
    */
-  addPanel(body: { tabId?: string; content?: PanelContent } = {}): Promise<PanelActionResult> {
+  addPanel(body: { tabId?: string; content?: PanelContent; activate?: boolean } = {}): Promise<PanelActionResult> {
     return this.req("POST", "/app/panels", body);
   }
 
@@ -210,23 +243,34 @@ export class ColibriClient {
   }
 
   // ── notifications & signals ──────────────────────────────────────────────
-  /** Raise a toast in the terminal. */
-  notify(message: string, severity: "info" | "warning" | "error" = "info", source?: string): Promise<{ ok: boolean }> {
+  /** Raise a toast in the terminal (max 500 chars). */
+  notify(
+    message: string,
+    severity: "info" | "success" | "warning" | "error" = "info",
+    source?: string,
+  ): Promise<{ status: string }> {
     return this.req("POST", "/notifications", { message, severity, source });
   }
-  /** Post a free-text market signal into the terminal's Notifications → API tab. */
-  signal(exchange: string, symbol: string, text: string): Promise<{ ok: boolean }> {
+  /** Post a free-text market signal into the terminal's Notifications → API tab (max 200 chars). */
+  signal(exchange: string, symbol: string, text: string): Promise<{ status: string }> {
     return this.req("POST", "/signals", { exchange, symbol, text });
   }
 
   // ── signal levels (API-owned price alerts, drawn on the ladder) ───────────
-  signalLevels(exchange?: string, symbol?: string): Promise<SignalLevel[]> {
+  /** GET /signal-levels — filter by venue / symbol / owning connection. */
+  signalLevels(exchange?: string, symbol?: string, connectionId?: string): Promise<SignalLevel[]> {
     const q = new URLSearchParams();
     if (exchange) q.set("exchange", exchange);
     if (symbol) q.set("symbol", symbol);
+    if (connectionId) q.set("connectionId", connectionId);
     const qs = q.toString();
     return this.req<{ levels: SignalLevel[] }>("GET", `/signal-levels${qs ? "?" + qs : ""}`).then((r) => r.levels);
   }
+  /**
+   * POST /signal-levels → 201. A level fires at most once: `oneShot` removes it on fire, else it
+   * is kept marked `isTriggered` (sweep with {@link deleteTriggeredSignalLevels}). `connectionId`
+   * optionally ties the level to a connection (organizational — no trading grant needed).
+   */
   createSignalLevel(l: {
     exchange: string;
     symbol: string;
@@ -234,11 +278,21 @@ export class ColibriClient {
     direction?: SignalDirection;
     note?: string;
     oneShot?: boolean;
+    connectionId?: string;
   }): Promise<SignalLevel> {
     return this.req("POST", "/signal-levels", l);
   }
-  deleteSignalLevel(id: string): Promise<void> {
+  /** DELETE /signal-levels/{id} → {removed: 1}. */
+  deleteSignalLevel(id: string): Promise<{ removed: number }> {
     return this.req("DELETE", `/signal-levels/${enc(id)}`);
+  }
+  /** DELETE /signal-levels?exchange=&symbol= — clear every level of one symbol. */
+  deleteSignalLevels(exchange: string, symbol: string): Promise<{ removed: number }> {
+    return this.req("DELETE", `/signal-levels?exchange=${enc(exchange)}&symbol=${enc(symbol)}`);
+  }
+  /** DELETE /signal-levels/triggered — sweep every fired level (all venues/symbols/connections). */
+  deleteTriggeredSignalLevels(): Promise<{ removed: number }> {
+    return this.req("DELETE", "/signal-levels/triggered");
   }
 
   // ── streaming ────────────────────────────────────────────────────────────

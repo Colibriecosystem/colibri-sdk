@@ -1,4 +1,4 @@
-// Trading — place, cancel, cancel-all, panic. GRANT-GATED (Settings → Program → Local API).
+// Trading — place, cancel, bulk cancel, emergency sweeps. GRANT-GATED (Settings → Program → Local API).
 //
 // SAFETY: this example places a REAL order. It is a no-op UNLESS you arm it:
 //   COLIBRI_ARM=1 npx tsx examples/trading.ts
@@ -10,9 +10,10 @@ const client = await ColibriClient.discover();
 const [EXCHANGE, SYMBOL] = ["BinanceSpot", "BTCUSDT"];
 
 // Pick the first trading-enabled connection (needs the per-connection grant).
-const conn = (await client.connections()).find((c) => c.apiTradingEnabled);
+// The venue derives from the connection — the order body carries neither connectionId nor exchange.
+const conn = (await client.connections()).find((c) => c.apiTradingEnabled && c.exchange === EXCHANGE);
 if (!conn) {
-  console.log("no trading-granted connection — enable a grant in Settings → Program → Local API");
+  console.log(`no trading-granted ${EXCHANGE} connection — enable a grant in Settings → Program → Local API`);
   process.exit(0);
 }
 
@@ -20,33 +21,35 @@ const book = await client.book(EXCHANGE, SYMBOL);
 const restPrice = (Number(book.bestBid) * 0.5).toFixed(2); // 50% below market → will not fill
 
 if (!ARMED) {
-  console.log("DRY RUN (set COLIBRI_ARM=1 to actually trade). Would place:");
-  console.log({ connectionId: conn.id, exchange: EXCHANGE, symbol: SYMBOL, side: "BUY", type: "LIMIT", price: restPrice, sizeQuote: "10" });
+  console.log("DRY RUN (set COLIBRI_ARM=1 to actually trade). Would place on", conn.id, ":");
+  console.log({ symbol: SYMBOL, side: "BUY", type: "Limit", price: restPrice, sizeQuote: "10" });
   process.exit(0);
 }
 
-// POST /orders  → 202 { clientOrderId, status } ; lifecycle then arrives on the WS `orders` channel.
-const placed = await client.placeOrder({
-  connectionId: conn.id,
-  exchange: EXCHANGE,
+// POST /connections/{id}/orders  → 202 { clientOrderId, status } ; lifecycle then arrives on the WS `orders` channel.
+const placed = await client.placeOrder(conn.id, {
   symbol: SYMBOL,
   side: "BUY",
-  type: "LIMIT",
+  type: "Limit",
   price: restPrice,
   sizeQuote: "10", // spend $10 (use sizeBase for a coin amount instead)
 });
 console.log("placed:", placed);
 
-// DELETE /orders/{clientOrderId}?connectionId=
-await client.cancelOrder(placed.clientOrderId, conn.id);
+// DELETE /connections/{id}/orders/{clientOrderId}?symbol=
+await client.cancelOrder(conn.id, placed.clientOrderId, SYMBOL);
 console.log("cancelled", placed.clientOrderId);
 
-// POST /orders/cancelAll  — every working order for this symbol
-await client.cancelAll(conn.id, EXCHANGE, SYMBOL);
-console.log("cancel-all done");
+// DELETE /connections/{id}/orders?symbol=  — every working order for this symbol
+await client.cancelAll(conn.id, SYMBOL);
+console.log("cancel-all (symbol) done");
 
-// POST /panic/cancel-all-orders  — the global Del key (omit id → every granted account)
-console.log("panic cancel-all-orders:", await client.panicCancelAllOrders(conn.id));
+// DELETE /connections/{id}/orders  — every order on the whole account (positions untouched)
+// await client.cancelAll(conn.id);
 
-// POST /panic/close-all-positions — the NumPad0 super-panic (flatten + cancel)
-// console.log(await client.panicCloseAllPositions(conn.id));
+// DELETE /connections/{id}/positions — close every position + cancel leftovers on this account
+// await client.closePositions(conn.id);
+
+// Emergency sweeps — EVERY granted account, one call (the terminal's global hotkey scopes):
+console.log("sweep cancel-all-orders:", await client.cancelAllOrders()); // DELETE /orders
+// console.log("sweep close-all-positions:", await client.closeAllPositions()); // DELETE /positions

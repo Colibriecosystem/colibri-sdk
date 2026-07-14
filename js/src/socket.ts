@@ -73,8 +73,15 @@ export class ColibriSocket {
     return this;
   }
 
-  /** Register a handler for a channel (`"book"`, `"trades"`, …), `"error"`, or `"*"` for every frame. */
-  on(event: Channel | "error" | "*", handler: Handler): this {
+  /**
+   * Register a handler for a frame TYPE: a market/account channel name (`"book"`, `"trades"`, …),
+   * `"notification"` / `"signalLevel"` (the app-wide channels push singular frame types),
+   * `"subscribed"` / `"unsubscribed"` (acks), `"error"`, or `"*"` for every frame.
+   */
+  on(
+    event: Channel | "notification" | "signalLevel" | "subscribed" | "unsubscribed" | "error" | "*",
+    handler: Handler,
+  ): this {
     let set = this.handlers.get(event);
     if (!set) {
       set = new Set();

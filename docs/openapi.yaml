@@ -1,0 +1,1980 @@
+openapi: 3.1.0
+info:
+  title: Colibri Local API
+  version: "1.0.0"
+  summary: Loopback HTTP + WebSocket API of the Colibri scalping terminal.
+  description: |
+    The Colibri Local API lets an external **widget, screener, or bot** read the order book, stream
+    trades, drive the terminal's panels, and trade — talking to a **running Colibri terminal** over
+    `127.0.0.1`. Exchange keys never leave the terminal; the process boundary isolates them.
+
+    > This documents the current pre-release surface (the 2026-07 RESTful redesign: resources nest
+    > under their owner — a venue's data under `/exchanges/{exchange}` and
+    > `/markets/{exchange}/{symbol}`, an account's data + trading under `/connections/{id}`).
+    > The discovery file / `GET /ping` report `apiVersion: 1`.
+
+    ## Connecting
+
+    1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access
+       token**. Tick **"Allow web browser access"** if the client runs in a browser — this page's
+       *try it* console against `127.0.0.1` needs that toggle too, since browser requests carry an
+       `Origin` header the API otherwise rejects.
+    2. **Discovery file** (native clients): while the API is on the terminal writes
+       `%APPDATA%\Colibri\localapi.json` = `{ "port", "token", "apiVersion", "pid" }`, so an SDK
+       auto-connects with zero manual steps. The file is deleted on shutdown; `pid` lets a client
+       detect a stale file left by a crashed process.
+
+    The server binds **loopback only** (never `0.0.0.0`). The default preferred port is `18845`;
+    when taken, the server walks up to a free port — always read the real port from the discovery
+    file or the Settings page.
+
+    ## Authentication
+
+    Every request except `GET /ping` carries the bearer token:
+
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    Three gates run on each request/upgrade, in order: **Origin-reject** (browser-originated
+    requests are blocked unless "Allow web browser access" is on) → **Host-check** (the `Host`
+    header must be loopback — anti-DNS-rebinding) → **constant-time token compare**. A browser
+    WebSocket cannot set the header, so the `/stream` upgrade also accepts `?access_token=<token>`.
+
+    ### Grants (trading)
+
+    Reads work with just the token. **Trading** — and binding a trading account to a panel —
+    additionally needs a **per-connection grant** (Settings → Program → Local API): a granted
+    connection can trade via the API, an ungranted one answers `403 trading_not_enabled` even with
+    a valid token. A connection is bound to exactly one venue, so the exchange is always derived
+    FROM the connection — never a request parameter.
+
+    ## Conventions
+
+    - **Prices / sizes / quantities are decimal STRINGS** (`"64950.10"`) — JSON floats silently
+      corrupt crypto tick precision (ticks go down to 1e-11).
+    - Times are **unix milliseconds** (`…Ms` fields) unless a field says otherwise
+      (`startUnixSec` on cluster buckets is unix seconds).
+    - `exchange` values are the enum-name strings from `GET /exchanges` (e.g. `BinanceSpot`,
+      `BinanceLinearFutures`), parsed case-insensitively.
+    - Errors are an HTTP status + a JSON body `{"code","message"}`. Codes: `unauthorized`,
+      `forbidden_origin`, `forbidden_host`, `not_found`, `unknown_connection`, `unknown_symbol`,
+      `unknown_panel`, `unknown_tab`, `trading_not_enabled`, `permission_denied`, `not_ready`,
+      `rate_limited`, `bad_request`, `unavailable`, `internal`.
+    - Accepted trading mutations answer **`202`**: the command is *enqueued* on the same
+      fire-and-forget path a terminal click uses; exchange confirmation arrives asynchronously on
+      the WebSocket `orders` channel.
+
+    ## WebSocket — `/stream`
+
+    OpenAPI does not model WebSockets, so the live-streaming protocol is summarized here.
+
+    Upgrade `GET /stream` (token via the `Authorization` header, or `?access_token=` for browsers).
+    Then exchange JSON text frames:
+
+    ```jsonc
+    // → subscribe (id is optional and echoed back)
+    { "type": "subscribe", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" }, "id": "1" }
+    // ← ack
+    { "type": "subscribed", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" }, "id": "1" }
+    // ← data frames
+    { "type": "trades", "data": { "exchange": "BinanceSpot", "symbol": "BTCUSDT", "trades": [ { "price": "…", "qty": "…", "isBuy": true, "timeMs": 0 } ] } }
+    // ← error
+    { "type": "error", "data": { "code": "bad_request", "message": "…" }, "id": "1" }
+    ```
+
+    Unsubscribe with `{ "type": "unsubscribe", "data": { "channel": …, … } }` → `unsubscribed`.
+
+    | Channel | Keyed by | Extra params | Delivery |
+    |---|---|---|---|
+    | `book` | `exchange` + `symbol` | `hz` (1–10, default 10), `depth` (1–500, default 50) | throttled **full snapshots**, sent only when the book changed (frame `data` = the same shape as `GET …/book`) |
+    | `trades` | `exchange` + `symbol` | — | **incremental** — batches of new prints, oldest → newest |
+    | `funding` | `exchange` + `symbol` | — | on change (frame `data` = the `GET …/funding` shape) |
+    | `positions` / `orders` / `balance` | `connectionId` | — | **full snapshot** pushed on change (frame `data` = the matching REST response shape) |
+    | `notifications` | — (app-wide) | — | terminal notifications (secret-free); on subscribe a bounded backlog is replayed AFTER the ack, then live |
+    | `signalLevels` | — (app-wide) | — | `{"type":"signalLevel","event":"placed"\|"removed"\|"triggered","data":<SignalLevel>}`; on subscribe the current set is replayed as `placed` events AFTER the ack |
+
+    Market frames are droppable **latest-wins** under backpressure; acks / errors / notifications /
+    signal-level events ride a reliable lane (a client that stops reading is disconnected).
+
+    A `notification` frame is
+    `{"type":"notification","data":{kind, severity, message, symbol?, connectionId?, connectionLabel?}}`.
+
+    ## SDKs
+
+    Typed clients (REST + WebSocket + discovery) for JavaScript/TypeScript, Python, and C# live in
+    the [colibri-sdk repository](https://github.com/colibriecosystem/colibri-sdk).
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://127.0.0.1:18845
+    description: >-
+      Loopback only. 18845 is the preferred default port — the terminal walks to a free port when
+      it is taken, so read the real port from the discovery file
+      (%APPDATA%\Colibri\localapi.json) or Settings → Program → Local API. Browser-based "try it"
+      requests additionally need the "Allow web browser access" toggle.
+
+security:
+  - bearerToken: []
+
+tags:
+  - name: Discovery
+    description: Liveness + version — the one token-free route.
+  - name: Market data
+    description: Venue catalog, symbol universes, order-book / cluster / funding snapshots.
+  - name: Settings
+    description: The exchange-tier orderbook-settings slice (effective values + partial update).
+  - name: Connections
+    description: Configured exchange accounts and their positions / orders / balances (reads).
+  - name: Trading
+    description: >-
+      Place / cancel / close — grant-gated per connection. Every accepted mutation answers 202
+      (enqueued); confirmation arrives on the WebSocket `orders` channel.
+  - name: Panels
+    description: >-
+      Slot control — enumerate and drive the terminal's panels by a durable slot id. A SLOT is the
+      durable box (its GUID survives an instrument change, a clear, and a restart); a PANEL is the
+      content that fills it.
+  - name: App
+    description: Other terminal gestures — combos.
+  - name: Notifications & signals
+    description: Raise a toast or a market signal inside the terminal.
+  - name: Signal levels
+    description: API-owned price alerts, drawn on the ladder and fired on price crossings.
+
+paths:
+  /ping:
+    get:
+      operationId: ping
+      tags: [Discovery]
+      summary: Liveness + version
+      description: >-
+        The ONE token-exempt route (the Origin and Host gates still apply). Returns the app name,
+        version, protocol version, and the live bound port — discovery only, nothing sensitive.
+      security: []
+      responses:
+        "200":
+          description: The terminal is up and the Local API is enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ping"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /exchanges:
+    get:
+      operationId: listExchanges
+      tags: [Market data]
+      summary: The venue catalog
+      description: >-
+        Every venue the terminal recognizes. `id` is the exact string every `exchange` parameter
+        across the API accepts (enum names like `BinanceLinearFutures`, case-insensitive on parse);
+        `trading: false` marks market-data-only venues. Built from the app's registered exchange
+        descriptors, so a client never has to hardcode venue strings.
+      responses:
+        "200":
+          description: The registered venue set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExchangesResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /exchanges/{exchange}/symbols:
+    get:
+      operationId: listSymbols
+      tags: [Market data]
+      summary: The venue's symbol universe
+      description: >-
+        Every tradeable instrument on the venue, with metadata (base/quote asset, tick size, lot
+        step). Served from the terminal's three-tier symbol cache.
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+      responses:
+        "200":
+          description: The symbol universe.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SymbolsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /markets/{exchange}/{symbol}/book:
+    get:
+      operationId: getBook
+      tags: [Market data]
+      summary: Order-book snapshot
+      description: >-
+        A dual-unit order-book snapshot: every level carries both the base-coin quantity and the
+        USD volume. Levels are sorted away from best (asks ascending, bids descending) and capped
+        at the requested depth. The first request for a symbol subscribes the API's own market
+        state — when the book is not live yet the route answers `503 not_ready`; retry shortly.
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+        - $ref: "#/components/parameters/symbolPath"
+        - name: depth
+          in: query
+          required: false
+          description: "Max levels per side (clamped to 1–500; default 50)."
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        "200":
+          description: The book snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /markets/{exchange}/{symbol}/clusters:
+    get:
+      operationId: getClusters
+      tags: [Market data]
+      summary: Volume-cluster (footprint) buckets
+      description: >-
+        Raw **1-minute** cluster buckets, oldest → newest — per-price buy/sell sums in both units
+        plus per-bucket totals. The client merges buckets into coarser timeframes itself. Answers
+        an empty bucket list before any trade has printed (no liveness gate).
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+        - $ref: "#/components/parameters/symbolPath"
+        - name: limit
+          in: query
+          required: false
+          description: "Max buckets, newest kept (clamped to 1–4320 = 72 h of minutes; default 60)."
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 4320
+            default: 60
+      responses:
+        "200":
+          description: The cluster buckets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clusters"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /markets/{exchange}/{symbol}/funding:
+    get:
+      operationId: getFunding
+      tags: [Market data]
+      summary: Perp funding rate
+      description: >-
+        The perpetual's current funding rate + next settlement time. Spot venues — and perps whose
+        funding has not been fetched yet — answer `404` with code `unavailable`.
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+        - $ref: "#/components/parameters/symbolPath"
+      responses:
+        "200":
+          description: The funding snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Funding"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No funding data for this market (spot venue, or not fetched yet). Code `unavailable`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /exchanges/{exchange}/orderbook-settings:
+    get:
+      operationId: getOrderbookSettings
+      tags: [Settings]
+      summary: Effective orderbook settings (exchange tier)
+      description: >-
+        The curated orderbook-settings slice, resolved to the EFFECTIVE values a fresh panel of
+        this venue would use (exchange row + defaults — every field set). Scope is the exchange
+        tier of the terminal's settings cascade: a widget knows venues, not panels/tabs.
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+      responses:
+        "200":
+          description: The effective settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderbookSettingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: patchOrderbookSettings
+      tags: [Settings]
+      summary: Partially update orderbook settings (exchange tier)
+      description: >-
+        A PARTIAL update — only the fields present in the body change; a parse failure on any field
+        rejects the WHOLE request before any mutation. Live panels pick the change up immediately,
+        exactly like a Settings-window save. Resetting a field to "inherit" is out of scope.
+      parameters:
+        - $ref: "#/components/parameters/exchangePath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderbookSettings"
+      responses:
+        "200":
+          description: Applied. Echoes the patch fields back.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderbookSettingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /connections:
+    get:
+      operationId: listConnections
+      tags: [Connections]
+      summary: The configured connection list
+      description: >-
+        Every configured exchange connection (account). No credentials ever cross the wire —
+        id, venue, label, and capability flags only.
+      responses:
+        "200":
+          description: The connection list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /connections/{id}:
+    get:
+      operationId: getConnection
+      tags: [Connections]
+      summary: One connection
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "200":
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Connection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+
+  /connections/{id}/positions:
+    get:
+      operationId: listPositions
+      tags: [Connections]
+      summary: Open positions
+      description: Open positions across the connection's registered symbols. Quantity is signed (positive = long).
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "200":
+          description: The open positions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+    delete:
+      operationId: closePositions
+      tags: [Trading]
+      summary: Close every position on the connection
+      description: >-
+        Close every open position at market + cancel leftover orders on this one connection (the
+        terminal's super-panic scope, one account). **Grant-gated.** Answers `202` — the commands
+        are enqueued; confirmation rides the WebSocket `orders` / `positions` channels.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "202":
+          description: Enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /connections/{id}/orders:
+    get:
+      operationId: listOrders
+      tags: [Connections]
+      summary: Active orders
+      description: Active (resting) orders — regular and trigger — across the connection's registered symbols.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "200":
+          description: The active orders.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrdersResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+    post:
+      operationId: placeOrder
+      tags: [Trading]
+      summary: Place an order
+      description: >-
+        Place a Limit or Market order on this connection. **Grant-gated.** The venue derives from
+        the connection — a connection is bound to exactly one exchange. `side` is `BUY`/`SELL`
+        (case-insensitive); `type` is `Limit`/`Market` (case-insensitive; trigger types are a
+        documented follow-up). Exactly one of `sizeQuote` (spend N quote / USDT) or `sizeBase`
+        (N coins) must be positive. `price` is required for Limit and must be ABSENT for Market.
+        The order routes through the SAME enqueue path a terminal click uses, so per-vendor wire
+        rules and the app/user permission tiers are reused. Answers `202` with the client order id
+        to track on the WebSocket `orders` channel.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrder"
+      responses:
+        "202":
+          description: Enqueued — track the client order id on the WS `orders` channel.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaceOrderAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "503":
+          $ref: "#/components/responses/NotReady"
+    delete:
+      operationId: cancelOrders
+      tags: [Trading]
+      summary: Bulk-cancel orders on the connection
+      description: >-
+        Bulk cancel on one connection. With `?symbol=` — every working order for that symbol;
+        without — every order across ALL of the account's symbols (the account-wide sweep).
+        Positions are untouched. **Grant-gated.** Answers `202` (enqueued).
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+        - name: symbol
+          in: query
+          required: false
+          description: Scope the cancel to one symbol; omit for the whole account.
+          schema:
+            type: string
+          example: BTCUSDT
+      responses:
+        "202":
+          description: Enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /connections/{id}/orders/{clientOrderId}:
+    delete:
+      operationId: cancelOrder
+      tags: [Trading]
+      summary: Cancel one order
+      description: >-
+        Cancel one order by its client order id (the id `POST …/orders` returned, also visible on
+        `GET …/orders`). The `symbol` query parameter is REQUIRED. **Grant-gated.** Answers `202`
+        (enqueued).
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+        - name: clientOrderId
+          in: path
+          required: true
+          description: The order's client id.
+          schema:
+            type: string
+        - name: symbol
+          in: query
+          required: true
+          description: The order's symbol (routing key — required).
+          schema:
+            type: string
+          example: BTCUSDT
+      responses:
+        "202":
+          description: Enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /connections/{id}/balances:
+    get:
+      operationId: listBalances
+      tags: [Connections]
+      summary: Per-asset balances
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "200":
+          description: The balances.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+
+  /orders:
+    delete:
+      operationId: cancelAllOrdersEverywhere
+      tags: [Trading]
+      summary: "Emergency sweep: cancel every order on EVERY granted account"
+      description: >-
+        The all-granted sweep — one HTTP call, no client loop (the terminal's global cancel-all
+        hotkey scope). Cancels every order (regular + triggers) on every connection granted API
+        trading; positions are untouched. Best-effort per account: one account's failure never
+        aborts the rest. Answers `202` with how many accounts the action was dispatched to;
+        `403 trading_not_enabled` when NO connection is granted.
+      responses:
+        "202":
+          description: Dispatched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SweepResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+
+  /positions:
+    delete:
+      operationId: closeAllPositionsEverywhere
+      tags: [Trading]
+      summary: "Emergency sweep: close every position on EVERY granted account"
+      description: >-
+        The all-granted super-panic — close every position at market + cancel leftover orders on
+        every connection granted API trading (the terminal's global super-panic hotkey scope).
+        Best-effort per account. Answers `202` with the dispatched-account count;
+        `403 trading_not_enabled` when NO connection is granted.
+      responses:
+        "202":
+          description: Dispatched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SweepResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+
+  /app/panels:
+    get:
+      operationId: listPanels
+      tags: [Panels]
+      summary: The window → tab → slot tree
+      description: >-
+        Enumerate every window, tab, and slot. Optional scoping: `windowIndex` keeps only that
+        window (positional — out-of-range yields an empty tree); `tabId` keeps only that tab's
+        window/tab (durable id — no match is `404 unknown_tab`). Both combine as an intersection.
+      parameters:
+        - name: tabId
+          in: query
+          required: false
+          description: 'A tab''s durable id (copy: right-click a tab header → "Copy tab ID").'
+          schema:
+            type: string
+        - name: windowIndex
+          in: query
+          required: false
+          description: Positional window index (≥ 0). Window ids are not durable yet.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: The tree.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No tab with that id (code `unknown_tab`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: addPanel
+      tags: [Panels]
+      summary: Add a panel (or an empty box) to a tab
+      description: >-
+        Add a slot to the tab `tabId` (the ACTIVE tab when omitted). With `content` — one
+        instrument + the views that render it; with `content` null/absent — an EMPTY "+" box
+        (reserve now, fill later by its durable id via PUT). `activate: true` surfaces the terminal
+        window afterwards — the "see the move → open the book" gesture (default false so a
+        background layout tool never steals focus). Adding is a display action — token-gated only;
+        a `content.connectionId` binds a trading account and is **grant-gated**.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddPanelBody"
+      responses:
+        "201":
+          description: Added — `panel` is the created slot (drive it by `panel.slotId` from now on).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          description: Unknown tab or connection (codes `unknown_tab` / `unknown_connection`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /app/panels/{id}:
+    put:
+      operationId: setPanel
+      tags: [Panels]
+      summary: Idempotently set a slot's desired state
+      description: >-
+        Declaratively reconcile the slot to the desired state: change the instrument, switch views
+        (kind transitions are fine — an orderbook box can become a chart box and back; the id never
+        changes), or bind an account via `content.connectionId` (**grant-gated**; requires the
+        orderbook view — omitted = keep the slot's current account). `content` null/absent CLEARS
+        the slot — the box stays on screen and keeps its id.
+      parameters:
+        - $ref: "#/components/parameters/slotIdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSlotBody"
+      responses:
+        "200":
+          description: Reconciled — `panel` reflects the slot's new state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          description: Unknown slot or connection (codes `unknown_panel` / `unknown_connection`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: removePanel
+      tags: [Panels]
+      summary: Remove the slot
+      description: Remove the slot entirely (structural — its paired chart goes with it).
+      parameters:
+        - $ref: "#/components/parameters/slotIdPath"
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PanelActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No slot with that id (code `unknown_panel`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /app/combos:
+    post:
+      operationId: openCombo
+      tags: [App]
+      summary: Open a combo (the coin across every connection)
+      description: >-
+        Fan one coin across EVERY connection that lists it — one panel per connection. `target`
+        picks where: a new tab (default) or a new window. Display action — token-gated only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenComboBody"
+      responses:
+        "201":
+          description: Opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppActionResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /notifications:
+    post:
+      operationId: raiseNotification
+      tags: [Notifications & signals]
+      summary: Raise a notification in the terminal
+      description: >-
+        A widget raises a message INTO the terminal — shown as a real notification (toast + sound,
+        per the user's Settings → Notifications preferences). `source` is the widget's name,
+        prefixed to the shown message. Message max 500 characters. Token-gated only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotifyBody"
+      responses:
+        "200":
+          description: Raised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppActionResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Notifications are not wired (code `unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /signals:
+    post:
+      operationId: postSignal
+      tags: [Notifications & signals]
+      summary: Post a market signal
+      description: >-
+        Post a free-text market signal into the terminal's Notifications window (Signals + API
+        tabs). `text` is "what happened" (max 200 characters). Token-gated only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostSignalBody"
+      responses:
+        "200":
+          description: Raised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppActionResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Signals are not wired (code `unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /signal-levels:
+    get:
+      operationId: listSignalLevels
+      tags: [Signal levels]
+      summary: List signal levels
+      description: The API-owned price-alert set, optionally filtered by venue, symbol, and owning connection.
+      parameters:
+        - name: exchange
+          in: query
+          required: false
+          description: Filter by venue (an id from `GET /exchanges`).
+          schema:
+            type: string
+        - name: symbol
+          in: query
+          required: false
+          description: Filter by symbol.
+          schema:
+            type: string
+        - name: connectionId
+          in: query
+          required: false
+          description: Filter by owning connection.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The (filtered) level set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevelsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createSignalLevel
+      tags: [Signal levels]
+      summary: Create a signal level
+      description: >-
+        Place a price alert. It fires — regardless of any open panel — when the live price crosses
+        it, raising a terminal notification + a WS `signalLevels` event. Durable across restarts.
+        Lifecycle: a level fires **at most once**. `oneShot: true` → the level is REMOVED after it
+        fires; `oneShot: false` (default) → a fired level is KEPT, marked `isTriggered` +
+        `triggeredMs` (an audit row — sweep via `DELETE /signal-levels/triggered`). `connectionId`
+        optionally ties the level to a connection (must exist; organizational only — the fire path
+        is account-agnostic, so no trading grant is needed).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSignalLevelBody"
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+    delete:
+      operationId: deleteSignalLevelsBySymbol
+      tags: [Signal levels]
+      summary: Delete every level of one symbol
+      description: Clear all levels for one venue + symbol. Both query parameters are required.
+      parameters:
+        - name: exchange
+          in: query
+          required: true
+          description: The venue (an id from `GET /exchanges`).
+          schema:
+            type: string
+        - name: symbol
+          in: query
+          required: true
+          description: The symbol.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: How many levels were removed (0 = nothing matched).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevelRemoved"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /signal-levels/triggered:
+    delete:
+      operationId: deleteTriggeredSignalLevels
+      tags: [Signal levels]
+      summary: Sweep every fired level
+      description: >-
+        Remove every level that has fired (`isTriggered: true`) — all venues, symbols, and
+        connections. The cleanup companion of the keep-when-fired default.
+      responses:
+        "200":
+          description: How many levels were removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevelRemoved"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /signal-levels/{id}:
+    delete:
+      operationId: deleteSignalLevel
+      tags: [Signal levels]
+      summary: Delete one level
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The level id (`POST /signal-levels` returned it).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 'Removed (always `{"removed": 1}` on success).'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevelRemoved"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No such signal level (code `not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerToken:
+      type: http
+      scheme: bearer
+      description: >-
+        The access token from Settings → Program → Local API (also in the discovery file
+        %APPDATA%\Colibri\localapi.json). Compared in constant time. The `/stream` WebSocket
+        upgrade also accepts it as `?access_token=` (browsers cannot set the header).
+
+  parameters:
+    exchangePath:
+      name: exchange
+      in: path
+      required: true
+      description: >-
+        A venue id from `GET /exchanges` — enum names like `BinanceSpot` /
+        `BinanceLinearFutures` / `BybitLinearPerpetual`, parsed case-insensitively.
+      schema:
+        type: string
+      example: BinanceSpot
+    symbolPath:
+      name: symbol
+      in: path
+      required: true
+      description: >-
+        The venue's wire symbol (from `GET /exchanges/{exchange}/symbols`) — `BTCUSDT`;
+        quote-first venues keep their native form (e.g. UpBit `KRW-BTC`).
+      schema:
+        type: string
+      example: BTCUSDT
+    connectionIdPath:
+      name: id
+      in: path
+      required: true
+      description: A connection id from `GET /connections`.
+      schema:
+        type: string
+    slotIdPath:
+      name: id
+      in: path
+      required: true
+      description: >-
+        The slot's durable id — a GUID that survives an instrument change, a clear, a kind
+        transition, and a terminal restart. Copy it in the terminal (the ⧉ Copy ID control on a
+        panel; top-right on an empty box) or read it from `GET /app/panels`.
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token (code `unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: >-
+        Browser-originated request while web access is off (code `forbidden_origin`), or a
+        non-loopback Host header (code `forbidden_host`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Malformed body / unknown enum value / missing required field (code `bad_request`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnknownConnection:
+      description: No connection with this id (code `unknown_connection`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TradingNotEnabled:
+      description: >-
+        The connection has not been granted trading via the Local API — grant it in Settings →
+        Program → Local API (code `trading_not_enabled`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotReady:
+      description: >-
+        Not live / not ready yet — retry shortly (code `not_ready`). For trading: the connection's
+        market state or order backend is still warming up.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      description: Uniform error body accompanying every non-2xx status.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+          enum:
+            - unauthorized
+            - forbidden_origin
+            - forbidden_host
+            - not_found
+            - unknown_connection
+            - unknown_symbol
+            - unknown_panel
+            - unknown_tab
+            - trading_not_enabled
+            - permission_denied
+            - not_ready
+            - rate_limited
+            - bad_request
+            - unavailable
+            - internal
+        message:
+          type: string
+          description: Human-readable explanation.
+
+    Ping:
+      type: object
+      description: Liveness + discovery — nothing sensitive.
+      required: [name, version, apiVersion, port]
+      properties:
+        name:
+          type: string
+          description: The app name.
+          examples: [Colibri]
+        version:
+          type: string
+          description: The terminal's build version.
+        apiVersion:
+          type: integer
+          description: The Local API protocol version (currently 1).
+        port:
+          type: integer
+          description: The live bound port (useful when the preferred port was taken).
+
+    ExchangeDto:
+      type: object
+      description: One venue the terminal recognizes.
+      required: [id, name, marketType, trading]
+      properties:
+        id:
+          type: string
+          description: The exact string every `exchange` parameter across the API accepts (an enum name).
+          examples: [BinanceLinearFutures]
+        name:
+          type: string
+          description: Human-readable venue name.
+        marketType:
+          type: string
+          description: The venue's market type (e.g. `Spot`, `LinearFutures`).
+        trading:
+          type: boolean
+          description: false = market-data-only venue (no trading surface in the terminal).
+
+    ExchangesResponse:
+      type: object
+      required: [exchanges]
+      properties:
+        exchanges:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExchangeDto"
+
+    SymbolDto:
+      type: object
+      description: One tradeable instrument from the venue's universe.
+      required: [symbol, name, baseAsset, quoteAsset, tickSize, stepSize]
+      properties:
+        symbol:
+          type: string
+          description: The venue's wire symbol — the value every `symbol` parameter takes.
+        name:
+          type: string
+          description: Display name.
+        baseAsset:
+          type: string
+          description: Base asset (the coin).
+        quoteAsset:
+          type: string
+          description: Quote asset (what it is priced in).
+        tickSize:
+          type: string
+          description: Price tick size (decimal string).
+        stepSize:
+          type: string
+          description: Quantity lot step (decimal string).
+
+    SymbolsResponse:
+      type: object
+      required: [exchange, symbols]
+      properties:
+        exchange:
+          type: string
+          description: The venue id echoed back.
+        symbols:
+          type: array
+          items:
+            $ref: "#/components/schemas/SymbolDto"
+
+    BookLevel:
+      type: object
+      description: One order-book level in BOTH units (dual-unit contract).
+      required: [price, baseQty, usdVolume]
+      properties:
+        price:
+          type: string
+          description: Level price (decimal string).
+        baseQty:
+          type: string
+          description: Resting quantity in base-coin units (decimal string).
+        usdVolume:
+          type: string
+          description: Resting volume in USD (decimal string).
+
+    Book:
+      type: object
+      description: >-
+        An order-book snapshot. Levels are sorted away from best — asks ascending, bids
+        descending — and capped at the requested depth.
+      required: [exchange, symbol, tickSize, lastPrice, bestBid, bestAsk, bids, asks]
+      properties:
+        exchange:
+          type: string
+          description: The venue id echoed back.
+        symbol:
+          type: string
+          description: The symbol echoed back.
+        tickSize:
+          type: string
+          description: Price tick size (decimal string).
+        lastPrice:
+          type: string
+          description: Last traded price (decimal string; "0" before the first trade).
+        bestBid:
+          type:
+            - string
+            - "null"
+          description: Best bid price, or null when the bid side is empty.
+        bestAsk:
+          type:
+            - string
+            - "null"
+          description: Best ask price, or null when the ask side is empty.
+        bids:
+          type: array
+          description: Bid levels, best first (descending).
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        asks:
+          type: array
+          description: Ask levels, best first (ascending).
+          items:
+            $ref: "#/components/schemas/BookLevel"
+
+    ClusterLevel:
+      type: object
+      description: Per-price buy/sell sums inside one minute bucket, in both units.
+      required: [price, buyUsd, sellUsd, buyBase, sellBase]
+      properties:
+        price:
+          type: string
+          description: The price row (decimal string).
+        buyUsd:
+          type: string
+          description: Buy volume at this price, USD (decimal string).
+        sellUsd:
+          type: string
+          description: Sell volume at this price, USD (decimal string).
+        buyBase:
+          type: string
+          description: Buy volume at this price, base-coin units (decimal string).
+        sellBase:
+          type: string
+          description: Sell volume at this price, base-coin units (decimal string).
+
+    Cluster:
+      type: object
+      description: One 1-minute bucket of the cluster/footprint column.
+      required: [startUnixSec, totalBuyUsd, totalSellUsd, totalBuyBase, totalSellBase, levels]
+      properties:
+        startUnixSec:
+          type: integer
+          format: int64
+          description: Bucket start time, unix SECONDS.
+        totalBuyUsd:
+          type: string
+          description: Whole-bucket buy volume, USD (decimal string).
+        totalSellUsd:
+          type: string
+          description: Whole-bucket sell volume, USD (decimal string).
+        totalBuyBase:
+          type: string
+          description: Whole-bucket buy volume, base units (decimal string).
+        totalSellBase:
+          type: string
+          description: Whole-bucket sell volume, base units (decimal string).
+        levels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClusterLevel"
+
+    Clusters:
+      type: object
+      description: Raw 1-minute buckets, oldest → newest — the client merges timeframes itself.
+      required: [exchange, symbol, tickSize, buckets]
+      properties:
+        exchange:
+          type: string
+        symbol:
+          type: string
+        tickSize:
+          type: string
+          description: Price tick size (decimal string).
+        buckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Cluster"
+
+    Funding:
+      type: object
+      description: Perp funding — spot venues answer 404 `unavailable`.
+      required: [exchange, symbol, rate, nextFundingTimeMs]
+      properties:
+        exchange:
+          type: string
+        symbol:
+          type: string
+        rate:
+          type: string
+          description: The current funding rate as a decimal string (e.g. "0.0001" = 0.01%).
+        nextFundingTimeMs:
+          type: integer
+          format: int64
+          description: Next funding settlement, unix ms.
+
+    OrderbookSettings:
+      type: object
+      description: >-
+        The curated orderbook-settings slice (exchange tier of the terminal's settings cascade).
+        On GET every field is set (effective values); on PATCH every field is optional — only the
+        fields present change. Decimals are strings; enums are their names (case-insensitive on
+        write).
+      properties:
+        sizeUnit:
+          type:
+            - string
+            - "null"
+          description: "Order-size chip unit: `Usd` or `Base`."
+        depthUnit:
+          type:
+            - string
+            - "null"
+          description: "DOM/tape/cluster volume display unit: `Usd` or `Base`."
+        minTradeUsd:
+          type:
+            - integer
+            - "null"
+          description: Tick-tape minimum trade size in USD (0 = show every trade).
+        minTradeBase:
+          type:
+            - string
+            - "null"
+          description: Tick-tape minimum trade size in base units (decimal string; 0 = show every trade).
+        tickWindowMs:
+          type:
+            - integer
+            - "null"
+          description: Trade-bubble accumulation window, ms.
+        volumeBarThresholdUsd:
+          type:
+            - integer
+            - "null"
+          description: Orderbook volume-bar fill threshold, USD.
+        largeVolumeUsd:
+          type:
+            - integer
+            - "null"
+          description: '"Large volume" highlight threshold, USD.'
+        largeVolume2Usd:
+          type:
+            - integer
+            - "null"
+          description: 'Second "large volume" highlight threshold, USD.'
+        clusterFillThresholdUsd:
+          type:
+            - integer
+            - "null"
+          description: Cluster-cell fill threshold, USD.
+        aggregationMode:
+          type:
+            - string
+            - "null"
+          description: Price-aggregation mode (enum name).
+        aggregationDefaultValue:
+          type:
+            - string
+            - "null"
+          description: Default aggregation value (decimal string).
+        showTicks:
+          type:
+            - boolean
+            - "null"
+          description: Show the trade tape column.
+        showLiquidations:
+          type:
+            - boolean
+            - "null"
+          description: Show liquidation bubbles.
+        stopLossPercent:
+          type:
+            - string
+            - "null"
+          description: The automated breakeven stop-loss offset percent (the E hotkey), decimal string.
+        ocoEnabled:
+          type:
+            - boolean
+            - "null"
+          description: Auto-OCO bracket on position open.
+        ocoTakeProfitPercent:
+          type:
+            - string
+            - "null"
+          description: Auto-OCO take-profit distance percent (decimal string, > 0).
+        ocoStopLossPercent:
+          type:
+            - string
+            - "null"
+          description: Auto-OCO stop-loss distance percent (decimal string, > 0).
+
+    OrderbookSettingsResponse:
+      type: object
+      required: [exchange, settings]
+      properties:
+        exchange:
+          type: string
+          description: The venue id echoed back.
+        settings:
+          $ref: "#/components/schemas/OrderbookSettings"
+
+    Connection:
+      type: object
+      description: One exchange connection (account). No credentials ever cross the wire.
+      required: [id, exchange, marketType, label, demo, viewOnly, apiTradingEnabled]
+      properties:
+        id:
+          type: string
+          description: The connection id — the key for every `/connections/{id}` route and WS account channel.
+        exchange:
+          type: string
+          description: The venue (an enum name, as in `GET /exchanges`).
+        marketType:
+          type: string
+          description: The venue's market type (e.g. `Spot`, `LinearFutures`).
+        label:
+          type: string
+          description: The user's nickname for the connection (may be empty).
+        demo:
+          type: boolean
+          description: true = demo/testnet trading.
+        viewOnly:
+          type: boolean
+          description: true = no credentials or trading disabled — market data only.
+        apiTradingEnabled:
+          type: boolean
+          description: true = this connection is GRANTED trading via the Local API.
+
+    ConnectionsResponse:
+      type: object
+      required: [connections]
+      properties:
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Connection"
+
+    Position:
+      type: object
+      description: One open position.
+      required: [symbol, exchange, side, quantity, entryPrice]
+      properties:
+        symbol:
+          type: string
+        exchange:
+          type: string
+        side:
+          type: string
+          description: Readable side (`LONG` / `SHORT`).
+        quantity:
+          type: string
+          description: SIGNED base quantity (decimal string; positive = long).
+        entryPrice:
+          type: string
+          description: Average entry price (decimal string).
+
+    PositionsResponse:
+      type: object
+      required: [connectionId, positions]
+      properties:
+        connectionId:
+          type: string
+        positions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Position"
+
+    Order:
+      type: object
+      description: One active (resting) order, regular or trigger.
+      required: [clientOrderId, exchangeOrderId, symbol, exchange, side, type, status, price, quantity, filledQuantity]
+      properties:
+        clientOrderId:
+          type: string
+          description: The client-side id — the cancel handle.
+        exchangeOrderId:
+          type:
+            - string
+            - "null"
+          description: The exchange-side id once confirmed.
+        symbol:
+          type: string
+        exchange:
+          type: string
+        side:
+          type: string
+          description: "`BUY` or `SELL`."
+        type:
+          type: string
+          description: Order type name (`Limit`, `Market`, `StopLoss`, `TakeProfit`, …).
+        status:
+          type: string
+          description: Order status name (`New`, `PartiallyFilled`, …).
+        price:
+          type: string
+          description: Order price (decimal string).
+        quantity:
+          type: string
+          description: Order quantity, base units (decimal string).
+        filledQuantity:
+          type: string
+          description: Filled quantity so far, base units (decimal string).
+
+    OrdersResponse:
+      type: object
+      required: [connectionId, orders]
+      properties:
+        connectionId:
+          type: string
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+
+    Balance:
+      type: object
+      description: One asset balance.
+      required: [asset, free, locked]
+      properties:
+        asset:
+          type: string
+        free:
+          type: string
+          description: Free amount (decimal string).
+        locked:
+          type: string
+          description: Locked/reserved amount (decimal string).
+
+    BalanceResponse:
+      type: object
+      required: [connectionId, balances]
+      properties:
+        connectionId:
+          type: string
+        balances:
+          type: array
+          items:
+            $ref: "#/components/schemas/Balance"
+
+    PlaceOrder:
+      type: object
+      description: >-
+        A place-order request. The connection (and therefore the venue) is the URL. Give EITHER
+        `sizeQuote` (spend N quote / USDT) OR `sizeBase` (N coins) — exactly one positive.
+        `price` is required for Limit and must be ABSENT for Market.
+      required: [symbol, side, type]
+      properties:
+        symbol:
+          type: string
+          description: The instrument to trade.
+          examples: [BTCUSDT]
+        side:
+          type: string
+          description: Order side (case-insensitive).
+          enum: [BUY, SELL]
+        type:
+          type: string
+          description: Order type (case-insensitive). Trigger types are a documented follow-up.
+          enum: [Limit, Market]
+        price:
+          type: string
+          description: Limit price (decimal string) — required for Limit, forbidden for Market.
+        sizeQuote:
+          type: string
+          description: Size in quote currency (decimal string) — "spend N USDT".
+        sizeBase:
+          type: string
+          description: Size in base coin (decimal string) — "N coins".
+        reduceOnly:
+          type: boolean
+          default: false
+          description: Closing order — never increases the position (futures).
+
+    PlaceOrderAccepted:
+      type: object
+      description: The place was enqueued; track the id on the WS `orders` channel.
+      required: [clientOrderId, status]
+      properties:
+        clientOrderId:
+          type: string
+          description: The minted client order id — also the cancel handle.
+        status:
+          type: string
+          description: Always `accepted`.
+
+    CancelAccepted:
+      type: object
+      description: The cancel/close was enqueued; confirmation rides the WS `orders` channel.
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: Always `accepted`.
+
+    SweepResult:
+      type: object
+      description: All-granted sweep result.
+      required: [status, accounts]
+      properties:
+        status:
+          type: string
+          description: Always `accepted`.
+        accounts:
+          type: integer
+          description: How many granted accounts the action was dispatched to.
+
+    PanelChart:
+      type: object
+      description: The chart paired into a slot's column.
+      required: [exchange, symbol, interval, contentId]
+      properties:
+        exchange:
+          type: string
+        symbol:
+          type: string
+        interval:
+          type: string
+          description: The chart timeframe (e.g. `1m`, `5m`).
+        contentId:
+          type: string
+          description: The chart's per-instrument content id.
+
+    Panel:
+      type: object
+      description: >-
+        One slot. `slotId` is the durable box handle (the op key — survives an instrument change,
+        a clear, and a restart); `contentId` is the per-instrument id (changes with the
+        instrument).
+      required: [slotId, kind, empty, exchange, symbol, contentId, connectionId, viewOnly, chart]
+      properties:
+        slotId:
+          type: string
+          description: The durable slot id — drive the box by this.
+        kind:
+          type: string
+          description: What fills the slot.
+          enum: [orderbook, chart, empty]
+        empty:
+          type: boolean
+          description: true = the "+" placeholder (no content).
+        exchange:
+          type:
+            - string
+            - "null"
+          description: The instrument's venue (null when empty).
+        symbol:
+          type:
+            - string
+            - "null"
+          description: The instrument (null when empty).
+        contentId:
+          type:
+            - string
+            - "null"
+          description: The per-instrument content id (null when empty).
+        connectionId:
+          type:
+            - string
+            - "null"
+          description: The bound trading account; null = view-only.
+        viewOnly:
+          type: boolean
+          description: true = no trading account bound.
+        chart:
+          oneOf:
+            - $ref: "#/components/schemas/PanelChart"
+            - type: "null"
+          description: The chart paired into the slot's column, when present.
+
+    Tab:
+      type: object
+      description: One tab, keyed by its durable `uuid` — the add target for `POST /app/panels`.
+      required: [uuid, index, slots]
+      properties:
+        uuid:
+          type: string
+          description: 'The tab''s durable id (copy: right-click a tab header → "Copy tab ID").'
+        index:
+          type: integer
+          description: Positional index within the window.
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Panel"
+
+    Window:
+      type: object
+      description: One window, keyed by position (durable window ids are a later addition).
+      required: [index, tabs]
+      properties:
+        index:
+          type: integer
+          description: Positional window index (0 = the main window).
+        tabs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tab"
+
+    PanelsResponse:
+      type: object
+      required: [windows]
+      properties:
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/Window"
+
+    PanelContent:
+      type: object
+      description: >-
+        The desired slot content: ONE instrument + the views that render it. `views` is
+        `["orderbook"]`, `["chart"]` (a standalone chart slot), or `["orderbook","chart"]` (the
+        pair — chart stacked in the orderbook's column, same instrument, app-default timeframe).
+      required: [exchange, symbol, views]
+      properties:
+        connectionId:
+          type: string
+          description: >-
+            Binds a trading account (GRANT-gated; requires the orderbook view — a chart has no
+            trading account). Omitted = the app adopts the venue's default connection by itself.
+        exchange:
+          type: string
+          description: A venue id from `GET /exchanges`.
+          examples: [BinanceLinearFutures]
+        symbol:
+          type: string
+          examples: [ETHUSDT]
+        views:
+          type: array
+          description: The views that render the instrument (at least one).
+          items:
+            type: string
+            enum: [orderbook, chart]
+
+    AddPanelBody:
+      type: object
+      description: All fields optional — an empty body adds an empty "+" box to the active tab.
+      properties:
+        tabId:
+          type: string
+          description: Target tab (durable id); omitted = the ACTIVE tab.
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/PanelContent"
+            - type: "null"
+          description: The panel content; null/absent adds an EMPTY "+" box (reserve now, fill later via PUT).
+        activate:
+          type: boolean
+          default: false
+          description: >-
+            Surface the terminal window afterwards — the "see the move → open the book" gesture.
+            Default false so a background layout tool never steals focus.
+
+    SetSlotBody:
+      type: object
+      description: The slot's desired state.
+      properties:
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/PanelContent"
+            - type: "null"
+          description: null/absent = CLEAR the slot (the box stays, same id).
+
+    PanelActionResponse:
+      type: object
+      description: Result of an add / set / remove — the status plus the affected slot.
+      required: [status, panel]
+      properties:
+        status:
+          type: string
+          description: "`added` (POST) / `ok` (PUT) / `removed` (DELETE)."
+        panel:
+          oneOf:
+            - $ref: "#/components/schemas/Panel"
+            - type: "null"
+          description: The affected slot's state after the operation.
+
+    OpenComboBody:
+      type: object
+      required: [symbol]
+      properties:
+        symbol:
+          type: string
+          description: The coin to fan across every connection that lists it.
+          examples: [BTCUSDT]
+        target:
+          type: string
+          description: Where the combo opens.
+          enum: [tab, window]
+          default: tab
+
+    AppActionResult:
+      type: object
+      description: Generic app-action acknowledgement.
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "`opened` (combos) / `raised` (notifications, signals)."
+
+    NotifyBody:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          maxLength: 500
+          description: The message to show (max 500 characters).
+        severity:
+          type: string
+          description: Notification severity (case-insensitive).
+          enum: [info, success, warning, error]
+          default: info
+        source:
+          type: string
+          description: The widget's name — prefixed to the shown message.
+
+    PostSignalBody:
+      type: object
+      required: [exchange, symbol, text]
+      properties:
+        exchange:
+          type: string
+          description: A venue id from `GET /exchanges`.
+        symbol:
+          type: string
+        text:
+          type: string
+          maxLength: 200
+          description: What happened (max 200 characters).
+
+    SignalLevel:
+      type: object
+      description: >-
+        One API-owned price alert. Fires at most once; a fired non-one-shot level is KEPT with
+        `isTriggered: true` + `triggeredMs` (sweep via `DELETE /signal-levels/triggered`), a
+        one-shot level auto-removes on fire.
+      required: [id, exchange, symbol, price, direction, note, oneShot, createdMs, connectionId, isTriggered, triggeredMs]
+      properties:
+        id:
+          type: string
+          description: Server-minted opaque id — the DELETE handle.
+        exchange:
+          type: string
+        symbol:
+          type: string
+        price:
+          type: string
+          description: The trigger price (decimal string).
+        direction:
+          type: string
+          description: Which crossing arms it (enum name — requests accept lowercase too).
+          enum: [Above, Below, Cross]
+        note:
+          type:
+            - string
+            - "null"
+          description: Free text shown in the fired notification.
+        oneShot:
+          type: boolean
+          description: true = removed after firing; false = kept, marked triggered.
+        createdMs:
+          type: integer
+          format: int64
+          description: Creation time, unix ms.
+        connectionId:
+          type:
+            - string
+            - "null"
+          description: The optional owning connection (organizational — the fire path is account-agnostic).
+        isTriggered:
+          type: boolean
+          description: true once the level has fired (non-one-shot levels only).
+        triggeredMs:
+          type:
+            - integer
+            - "null"
+          format: int64
+          description: Fire time, unix ms; null while untriggered.
+
+    SignalLevelsResponse:
+      type: object
+      required: [levels]
+      properties:
+        levels:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignalLevel"
+
+    CreateSignalLevelBody:
+      type: object
+      required: [exchange, symbol, price]
+      properties:
+        exchange:
+          type: string
+          description: A venue id from `GET /exchanges`.
+        symbol:
+          type: string
+        price:
+          type: string
+          description: The trigger price (positive decimal string).
+        direction:
+          type: string
+          description: Which crossing arms the level (case-insensitive).
+          enum: [above, below, cross]
+          default: cross
+        note:
+          type: string
+          description: Free text shown in the fired notification.
+        oneShot:
+          type: boolean
+          default: false
+          description: true = remove the level after it fires; false = keep it, marked triggered.
+        connectionId:
+          type: string
+          description: Optional owning connection (must exist; no trading grant needed — a level moves no money).
+
+    SignalLevelRemoved:
+      type: object
+      description: How many levels a DELETE removed (0 = nothing matched).
+      required: [removed]
+      properties:
+        removed:
+          type: integer

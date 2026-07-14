@@ -23,9 +23,10 @@ ws.on("positions", lambda d, f: print("[positions]", d))
 ws.on("orders", lambda d, f: print("[orders]", d))
 ws.on("balance", lambda d, f: print("[balance]", d))
 
-# App-wide channels.
-ws.on("notifications", lambda d, f: print("[notification]", d))
-ws.on("signalLevels", lambda d, f: print("[signalLevel]", f.get("event"), d))
+# App-wide channels. NB the pushed frame types are SINGULAR ("notification" / "signalLevel")
+# even though the subscribed channels are plural.
+ws.on("notification", lambda d, f: print("[notification]", d))
+ws.on("signalLevel", lambda d, f: print("[signalLevel]", f.get("event"), d))
 
 ws.on("error", lambda d, f: print("[error]", d))
 

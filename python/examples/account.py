@@ -21,19 +21,19 @@ conn = connections[0]
 # GET /connections/{id}
 print("\ndetail:", client.connection(conn["id"]))
 
-# GET /positions?connectionId=
+# GET /connections/{id}/positions
 positions = client.positions(conn["id"])
 print(f"\npositions ({len(positions)}):")
 for p in positions:
     print(f"  {p['symbol']}  {p['side']} {p['quantity']} @ {p['entryPrice']}")
 
-# GET /orders?connectionId=  — includes triggers
+# GET /connections/{id}/orders  — includes triggers
 orders = client.orders(conn["id"])
 print(f"\nopen orders ({len(orders)}):")
 for o in orders:
     print(f"  {o['clientOrderId']}  {o['side']} {o['type']} {o['quantity']} @ {o['price']}  {o['status']}")
 
-# GET /balance?connectionId=
+# GET /connections/{id}/balances
 balances = client.balance(conn["id"])
 print(f"\nbalances ({len(balances)}):")
 for b in balances[:8]:

@@ -4,17 +4,21 @@ The Colibri Local API is a loopback HTTP/1.1 + WebSocket API that lets an extern
 or bot read the order book, stream trades, and trade — talking to a **running Colibri terminal** over
 `127.0.0.1`. Keys never leave the terminal; the process boundary isolates them.
 
-> **Interactive explorer:** <https://colibriecosystem.github.io/colibri-sdk/> — poke every endpoint live.
+> **Full reference:** the machine-readable contract is [`openapi.yaml`](openapi.yaml), rendered as an
+> interactive Scalar page at <https://colibriecosystem.github.io/colibri-sdk/> — every operation,
+> parameter, schema, and error code, with a live *try-it* console. This file keeps only the
+> connection/auth basics and a route summary.
 
 ---
 
 ## Connecting
 
 1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access token**.
-   Tick **“Allow web browser access”** if the widget runs in a browser.
+   Tick **“Allow web browser access”** if the widget runs in a browser (the Scalar page's try-it
+   console needs it too).
 2. **Discovery file** (native clients): the terminal writes
    `%APPDATA%\Colibri\localapi.json` = `{ "port", "token", "apiVersion", "pid" }` while the API is on,
-   so an SDK auto-connects with zero config. Deleted on shutdown.
+   so an SDK auto-connects with zero config. Deleted on shutdown. `apiVersion` is currently `1`.
 
 **Base URL:** `http://127.0.0.1:<port>` — binds loopback only, never `0.0.0.0`.
 
@@ -32,157 +36,125 @@ so `/stream` also accepts `?access_token=<token>`.
 
 - **Reads** work with just the token.
 - **Trading** additionally needs a **per-connection grant** (Settings → Program → Local API), so a widget
-  holding the token can't trade an account you never authorized.
+  holding the token can't trade an account you never authorized. A connection is bound to exactly one
+  venue — the exchange always derives FROM the connection, never a request parameter.
 
 ## Numbers & errors
 
 - Prices / sizes / quantities are **decimal strings** (`"64950.10"`) — JSON floats lose crypto tick precision.
-- Errors are `{ "error": { "code", "message" } }` with an HTTP status. Codes: `unauthorized`,
-  `forbidden_origin`, `unknown_connection`, `unknown_symbol`, `unknown_panel`, `unknown_tab`,
-  `trading_not_enabled`, `permission_denied`, `not_ready`, `rate_limited`, `bad_request`,
-  `unavailable`, `internal`.
+- Times are unix **milliseconds** (`…Ms` fields); cluster buckets carry `startUnixSec` (unix seconds).
+- Errors are a top-level `{ "code", "message" }` with an HTTP status. Codes: `unauthorized`,
+  `forbidden_origin`, `forbidden_host`, `not_found`, `unknown_connection`, `unknown_symbol`,
+  `unknown_panel`, `unknown_tab`, `trading_not_enabled`, `permission_denied`, `not_ready`,
+  `rate_limited`, `bad_request`, `unavailable`, `internal`.
+- Accepted trading mutations answer **`202`** — the command is *enqueued* (the same fire-and-forget
+  path a terminal click uses); exchange confirmation arrives on the WS `orders` channel.
 
 ---
 
-## REST endpoints
+## Route summary
 
-### Discovery
+Resources nest under their owner (the RESTful redesign, 2026-07): a venue's data under
+`/exchanges/{exchange}` and `/markets/{exchange}/{symbol}`, an account's data + trading under
+`/connections/{id}`, the all-granted emergency sweeps at the top-level collections. Full
+request/response shapes live in [`openapi.yaml`](openapi.yaml).
+
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/ping` | `{name, version, apiVersion}` — the one token-free route |
-
-### Connections
-| Method | Path | Returns |
-|---|---|---|
+| GET | `/ping` | `{name, version, apiVersion, port}` — the one token-free route |
+| GET | `/exchanges` | the venue catalog — `id` is the string every `{exchange}` accepts; `trading:false` = view-only venue |
+| GET | `/exchanges/{exchange}/symbols` | the venue's symbol universe + metadata |
+| GET | `/markets/{exchange}/{symbol}/book` | `?depth=` (1–500). Dual-unit book snapshot |
+| GET | `/markets/{exchange}/{symbol}/clusters` | `?limit=` (1–4320). Raw 1-minute footprint buckets, oldest → newest — merge timeframes client-side |
+| GET | `/markets/{exchange}/{symbol}/funding` | perp funding (spot → 404 `unavailable`) |
+| GET / PATCH | `/exchanges/{exchange}/orderbook-settings` | effective render settings (exchange tier) / partial patch |
 | GET | `/connections` | `{connections: [{id, exchange, marketType, label, demo, viewOnly, apiTradingEnabled}]}` |
 | GET | `/connections/{id}` | one connection |
-
-### Market data
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/exchanges` | `{exchanges: [{id, name, marketType, trading}]}` — the venue catalog. `id` is the exact string every `exchange` param accepts; `trading: false` marks market-data-only venues |
-| GET | `/symbols?exchange=` | `{exchange, symbols: [{symbol, name, baseAsset, quoteAsset, tickSize, stepSize}]}` |
-| GET | `/book/{exchange}/{symbol}` | `?depth=` `?aggregation=`. `{exchange, symbol, tickSize, lastPrice, bestBid, bestAsk, bids, asks}` where each level is `{price, baseQty, usdVolume}` |
-| GET | `/clusters/{exchange}/{symbol}` | `?timeframe=`. Volume-cluster buckets |
-| GET | `/funding/{exchange}/{symbol}` | `{exchange, symbol, rate, nextFundingTimeMs}` (perps) |
-
-### Account (per connection)
-| Method | Path | Returns |
-|---|---|---|
-| GET | `/positions?connectionId=` | `{connectionId, positions: [{symbol, exchange, side, quantity, entryPrice}]}` |
-| GET | `/orders?connectionId=` | `{connectionId, orders: [{clientOrderId, exchangeOrderId, symbol, exchange, side, type, status, price, quantity, filledQuantity}]}` |
-| GET | `/balance?connectionId=` | `{connectionId, balances: [{asset, free, locked}]}` |
-| GET | `/orderbook-settings/{exchange}` | effective render settings (exchange tier) |
-| PUT | `/orderbook-settings/{exchange}` | partial patch |
-
-### Trading — grant-gated
-| Method | Path | Body / notes |
-|---|---|---|
-| POST | `/orders` | `{connectionId, exchange, symbol, side, type, price?, sizeQuote?, sizeBase?, reduceOnly?}` → `202 {clientOrderId, status}`. Lifecycle arrives on the WS `orders` channel. |
-| DELETE | `/orders/{clientOrderId}?connectionId=` | cancel one |
-| POST | `/orders/cancelAll` | `{connectionId, exchange, symbol}` |
-| POST | `/orders/cancel-all-orders` | `{connectionId?}` — account-wide: cancel every order, regular + triggers (the terminal's Del hotkey); omit id → every granted account |
-| POST | `/orders/close-all-positions` | `{connectionId?}` — account-wide: close every position + cancel leftovers (the NumPad0 hotkey) |
-
-`side` = `BUY`/`SELL`, `type` = `LIMIT`/`MARKET`. Give **either** `sizeQuote` (spend N quote) **or**
-`sizeBase` (N coins). `price` only for `LIMIT`. `reduceOnly` closes a position.
-
-### App bridge & signals
-| Method | Path | Body |
-|---|---|---|
-| POST | `/app/open-symbol` | `{exchange, symbol, connectionId?, views?}` — open one coin in the ACTIVE tab + surface the window. A **panel add** (same `connectionId`/`views` semantics as panel `content`, views default `["orderbook"]`) → `201 {status:"opened", panel}` with the created slot |
-| POST | `/app/open-combo` | `{symbol, target}` — fan across every connection (`target`: `tab`\|`window`) |
+| GET | `/connections/{id}/positions` \| `/orders` \| `/balances` | account reads |
+| POST | `/connections/{id}/orders` | `{symbol, side, type, price?, sizeQuote?, sizeBase?, reduceOnly?}` → `202 {clientOrderId, status}` — grant-gated; the venue derives from the connection |
+| DELETE | `/connections/{id}/orders/{clientOrderId}?symbol=` | cancel one (symbol required) → `202` |
+| DELETE | `/connections/{id}/orders[?symbol=]` | bulk cancel: one symbol, or the whole account when unscoped → `202` |
+| DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
+| DELETE | `/orders` | **emergency sweep**: cancel every order on EVERY granted account → `202 {status, accounts}` |
+| DELETE | `/positions` | **emergency sweep**: close every position on EVERY granted account → `202 {status, accounts}` |
+| GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → slot tree |
+| POST | `/app/panels` | `{tabId?, content?, activate?}` → `201` — add a panel (null content = empty "+" box; `activate` surfaces the window — the open-symbol gesture) |
+| PUT | `/app/panels/{slotId}` | `{content?}` — idempotent desired-state set (kind transitions ok; null content = clear, box keeps its id) |
+| DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
+| POST | `/app/combos` | `{symbol, target?}` → `201` — fan across every connection (`target`: `tab`\|`window`) |
 | POST | `/notifications` | `{message, severity?, source?}` — raise a toast |
 | POST | `/signals` | `{exchange, symbol, text}` — post into Notifications → API tab |
+| GET | `/signal-levels` | `?exchange=` `?symbol=` `?connectionId=` → `{levels}` |
+| POST | `/signal-levels` | `{exchange, symbol, price, direction?, note?, oneShot?, connectionId?}` → `201` SignalLevel |
+| DELETE | `/signal-levels/{id}` | remove one → `{removed}` |
+| DELETE | `/signal-levels?exchange=&symbol=` | clear a symbol → `{removed}` |
+| DELETE | `/signal-levels/triggered` | sweep every fired level → `{removed}` |
 
-### Panel control — drive the terminal's panels by a durable id
+**Signal-level lifecycle:** a level fires **at most once**. `oneShot: true` → auto-removed on fire;
+`oneShot: false` (default) → kept, marked `isTriggered` + `triggeredMs` (an audit row — sweep via
+`DELETE /signal-levels/triggered`). `connectionId` is an optional organizational owner (must exist;
+no trading grant — a level moves no money).
 
-A **slot** is the durable box in the terminal's grid — addressed by a GUID `slotId` that survives an
-**instrument change**, a **clear**, a **view/kind transition**, and a terminal **restart**, so a tool
-can drive the same box forever. A **panel** is the content that fills it. Copy ids from the terminal
-once at setup: the **⧉ Copy ID** control on a panel (hover the tool pill; top-right on an empty box)
-for a slot, or **right-click a tab header → Copy tab ID** (also in the tab-settings dialog header)
-for the `POST` add-target.
-
-| Method | Path | Body / notes |
-|---|---|---|
-| GET | `/app/panels` | `?tabId=<uuid>` `?windowIndex=N` (optional scoping). → `{windows: [{index, tabs: [{uuid, index, slots: [{slotId, kind, empty, exchange?, symbol?, contentId?, connectionId?, viewOnly, chart?}]}]}]}` |
-| POST | `/app/panels` | `{tabId?, content?}` → **201** — add a panel to a tab (active tab when `tabId` omitted; a trailing empty "+" box is reused first for an orderbook add). `content` null/absent adds an **empty "+" box** instead — reserve now, fill later by its durable id via PUT |
-| PUT | `/app/panels/{slotId}` | `{content?}` — **idempotent** desired-state set: change the instrument, switch views (**kind transitions ok** — an orderbook box can become a chart box and back), bind an account; `content` null/absent **clears** (the box stays, same id) |
-| DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
-
-**`content` is ONE instrument + the views that render it:**
-
-```jsonc
-{
-  "connectionId": "1as23…",              // optional — see Parameter reference
-  "exchange": "BinanceLinearFutures",    // an id from GET /exchanges
-  "symbol": "ETHUSDT",
-  "views": ["orderbook", "chart"]        // ["orderbook"] | ["chart"] | both (the pair)
-}
-```
-
-Add / change / clear are display actions — **token only**; `connectionId` binds a trading account and
-is **grant-gated** like trading (requires the orderbook view). **Omitted `connectionId` = anonymous**:
-the app itself adopts the venue's default connection, so the panel still shows that account's
-orders/position — no grant needed, because the app picks, not the API. Every write pulses the affected
-panel and logs a row in the terminal's Notifications → **API** tab. `kind` in the tree is
-`orderbook`|`chart`|`empty`; `connectionId: null` there = view-only.
+**Panel control:** a **slot** is the durable box in the terminal's grid — its GUID `slotId` survives
+an instrument change, a clear, a view/kind transition, and a terminal restart. A **panel** is the
+content that fills it. Copy ids in the terminal: the **⧉ Copy ID** control on a panel (top-right on
+an empty box) for a slot; **right-click a tab header → Copy tab ID** for the `POST` add-target.
+`content` = ONE instrument + the views that render it (`{connectionId?, exchange, symbol, views}`,
+`views` ⊆ `["orderbook","chart"]`). Omitted `connectionId` = the app adopts the venue's default
+connection by itself (no grant needed — the app picks, not the API).
 
 ## Parameter reference
 
 | Param | Where | Type / values | Notes |
 |---|---|---|---|
-| `exchange` | market data, trading, signals, panels | string — an `id` from **`GET /exchanges`** (e.g. `BinanceSpot`, `BinanceLinearFutures`, `BybitLinearPerpetual`) | Enum names, case-insensitive on parse; a venue with `trading: false` is view-only |
-| `symbol` | same | string, the venue's wire symbol (`BTCUSDT`; quote-first venues keep their native form, e.g. UpBit `KRW-BTC`) | From `GET /symbols?exchange=` |
+| `exchange` | market data, signals, panels `content`, signal levels | string — an `id` from **`GET /exchanges`** (e.g. `BinanceSpot`, `BinanceLinearFutures`, `BybitLinearPerpetual`) | Enum names, case-insensitive on parse; a venue with `trading: false` is view-only. Trading routes need NO exchange — the connection determines it |
+| `symbol` | same | string, the venue's wire symbol (`BTCUSDT`; quote-first venues keep their native form, e.g. UpBit `KRW-BTC`) | From `GET /exchanges/{exchange}/symbols` |
 | `views` | panels `content` | array — `"orderbook"`, `"chart"` (dedup, ≥1) | `["chart"]` = a standalone chart slot; both = the pair (chart stacked under the orderbook, same instrument, app-default timeframe) |
-| `connectionId` | trading, panels `content` | string — an `id` from `GET /connections` | **Grant-gated** (Settings → Program → Local API). Panels: requires the orderbook view; omitted = the app adopts the venue's default connection |
+| `connectionId` | trading URLs, panels `content`, signal levels | string — an `id` from `GET /connections` | Trading + panel binding are **grant-gated** (Settings → Program → Local API); a signal level's owner is organizational only. Panels: requires the orderbook view; omitted = the app adopts the venue's default connection |
 | `tabId` | `POST /app/panels`, `GET ?tabId=` | GUID ("N" form) — a tab's durable id | Copy: right-click a tab header → **Copy tab ID** |
 | `slotId` | `/app/panels/{slotId}` | GUID ("N" form) — the durable box handle | Copy: the ⧉ control on a panel; survives change / clear / restart |
 | `windowIndex` | `GET /app/panels?windowIndex=` | int ≥ 0, positional | Out-of-range → empty tree (window ids are not durable yet) |
-| `side` | `POST /orders` | `BUY` \| `SELL` | |
-| `type` | `POST /orders` | `LIMIT` \| `MARKET` | `price` required for LIMIT, omitted for MARKET |
-| `sizeQuote` / `sizeBase` | `POST /orders` | decimal string | Exactly one: spend N quote vs N coins |
-| `direction` | signal levels | `above` \| `below` \| `cross` | Default `cross` |
-| `severity` | `POST /notifications` | `info` \| `warning` \| `error` | Default `info` |
+| `activate` | `POST /app/panels` | bool, default `false` | Surface the terminal window after the add — the "see the move → open the book" gesture |
+| `side` | place order | `BUY` \| `SELL` (case-insensitive) | |
+| `type` | place order | `Limit` \| `Market` (case-insensitive) | `price` required for Limit, forbidden for Market; trigger types are a documented follow-up |
+| `sizeQuote` / `sizeBase` | place order | decimal string | Exactly one positive: spend N quote vs N coins |
+| `reduceOnly` | place order | bool, default `false` | Closing order — never increases the position (futures) |
+| `depth` | book (REST + WS) | int 1–500, default 50 | Levels per side |
+| `limit` | clusters | int 1–4320, default 60 | 1-minute buckets, newest kept |
+| `direction` | signal levels | `above` \| `below` \| `cross` (requests, case-insensitive) | Default `cross`; responses echo the enum name (`Above`/`Below`/`Cross`) |
+| `oneShot` | signal levels | bool, default `false` | true = remove on fire; false = keep, marked `isTriggered` |
+| `severity` | `POST /notifications` | `info` \| `success` \| `warning` \| `error` | Default `info` |
 | Prices / sizes | everywhere | decimal **strings** | JSON floats lose crypto tick precision |
-
-### Signal levels (API-owned price alerts, drawn on the ladder)
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/signal-levels?exchange=&symbol=` | `{levels: [...]}` |
-| POST | `/signal-levels` | `{exchange, symbol, price, direction?, note?, oneShot?}` → `201`. `direction` ∈ `above`\|`below`\|`cross` |
-| DELETE | `/signal-levels/{id}` | remove one |
-| DELETE | `/signal-levels?exchange=&symbol=` | clear a symbol → `{removed}` |
 
 ---
 
 ## WebSocket — `/stream`
 
-Subscribe with a JSON frame, receive live data frames.
+Subscribe with a JSON frame, receive live data frames. `id` is optional and echoed on acks/errors.
 
 ```jsonc
 // → subscribe
-{ "type": "subscribe", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" } }
+{ "type": "subscribe", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" }, "id": "1" }
 // ← ack
-{ "type": "ack", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" } }
+{ "type": "subscribed", "data": { "channel": "trades", "exchange": "BinanceSpot", "symbol": "BTCUSDT" }, "id": "1" }
 // ← data
 { "type": "trades", "data": { "exchange": "BinanceSpot", "symbol": "BTCUSDT", "trades": [ { "price": "...", "qty": "...", "isBuy": true, "timeMs": 0 } ] } }
 // ← error
-{ "type": "error", "data": { "code": "unknown_symbol", "message": "…" } }
+{ "type": "error", "data": { "code": "bad_request", "message": "…" }, "id": "1" }
 ```
 
 | Channel | Keyed by | Delivery |
 |---|---|---|
-| `book` | exchange+symbol | throttled full snapshots (`hz`, `depth`) |
-| `trades` | exchange+symbol | incremental (one frame per new print) |
+| `book` | exchange+symbol | throttled full snapshots (`hz` 1–10, `depth` 1–500), sent only on change |
+| `trades` | exchange+symbol | incremental — batches of new prints, oldest → newest |
 | `funding` | exchange+symbol | on change |
 | `positions` / `orders` / `balance` | `connectionId` | full snapshot on change |
-| `notifications` | — | terminal notifications (secret-free) |
-| `signalLevels` | — | `placed` / `removed` / `triggered` events |
+| `notifications` | — | terminal notifications (secret-free); backlog replayed after the ack, then live. Frame type: `notification` |
+| `signalLevels` | — | `placed` / `removed` / `triggered` events; the current set replays as `placed` after the ack. Frame type: `signalLevel` (`{type, event, data}`) |
 
-Unsubscribe with `{ "type": "unsubscribe", "data": { "channel": … } }`. Market-data frames are dropped
-latest-wins under backpressure; account frames are reliable.
+Unsubscribe with `{ "type": "unsubscribe", "data": { "channel": …, … } }` → `unsubscribed`. Market-data
+frames are dropped latest-wins under backpressure; acks / errors / notifications / signal-level events
+ride a reliable lane (a client that stops reading is disconnected).
 
 ---
 

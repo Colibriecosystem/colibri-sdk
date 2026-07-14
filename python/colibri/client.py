@@ -51,7 +51,8 @@ class ColibriClient:
                 text = resp.read().decode()
         except urllib.error.HTTPError as exc:
             text = exc.read().decode()
-            err = (json.loads(text).get("error") if text else None) or {}
+            # Error bodies are a top-level {code, message}.
+            err = json.loads(text) if text else {}
             raise ColibriError(exc.code, err.get("code", f"http_{exc.code}"), err.get("message", text)) from None
         return json.loads(text) if text else None
 
@@ -62,6 +63,7 @@ class ColibriClient:
 
     # ── discovery ────────────────────────────────────────────────────────────
     def ping(self) -> dict:
+        """Liveness + version + the live bound port — the one token-free route."""
         return self._req("GET", "/ping")
 
     # ── connections ──────────────────────────────────────────────────────────
@@ -72,33 +74,49 @@ class ColibriClient:
         return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}")
 
     # ── market data ──────────────────────────────────────────────────────────
+    def exchanges(self) -> list[dict]:
+        """The venue catalog — 'id' is the string every exchange param accepts; trading=False = view-only."""
+        return self._req("GET", "/exchanges")["exchanges"]
+
     def symbols(self, exchange: str) -> list[dict]:
-        return self._req("GET", "/symbols" + self._qs(exchange=exchange))["symbols"]
+        """GET /exchanges/{exchange}/symbols — the venue's symbol universe."""
+        return self._req("GET", f"/exchanges/{urllib.parse.quote(exchange)}/symbols")["symbols"]
 
-    def book(self, exchange: str, symbol: str, depth: int | None = None, aggregation: int | None = None) -> dict:
-        return self._req("GET", f"/book/{exchange}/{symbol}" + self._qs(depth=depth, aggregation=aggregation))
+    def book(self, exchange: str, symbol: str, depth: int | None = None) -> dict:
+        """GET /markets/{exchange}/{symbol}/book — dual-unit snapshot; depth = levels per side (1-500)."""
+        return self._req("GET", f"/markets/{exchange}/{symbol}/book" + self._qs(depth=depth))
 
-    def clusters(self, exchange: str, symbol: str, timeframe: str | None = None) -> dict:
-        return self._req("GET", f"/clusters/{exchange}/{symbol}" + self._qs(timeframe=timeframe))
+    def clusters(self, exchange: str, symbol: str, limit: int | None = None) -> dict:
+        """GET /markets/{exchange}/{symbol}/clusters — raw 1-minute buckets (merge timeframes yourself); limit 1-4320."""
+        return self._req("GET", f"/markets/{exchange}/{symbol}/clusters" + self._qs(limit=limit))
 
     def funding(self, exchange: str, symbol: str) -> dict:
-        return self._req("GET", f"/funding/{exchange}/{symbol}")
+        """GET /markets/{exchange}/{symbol}/funding — perps only (spot answers 404 'unavailable')."""
+        return self._req("GET", f"/markets/{exchange}/{symbol}/funding")
 
-    # ── account ──────────────────────────────────────────────────────────────
+    # ── orderbook settings (exchange tier) ──────────────────────────────────
+    def orderbook_settings(self, exchange: str) -> dict:
+        """GET /exchanges/{exchange}/orderbook-settings — the EFFECTIVE render settings for the venue."""
+        return self._req("GET", f"/exchanges/{urllib.parse.quote(exchange)}/orderbook-settings")
+
+    def patch_orderbook_settings(self, exchange: str, patch: dict) -> dict:
+        """PATCH /exchanges/{exchange}/orderbook-settings — partial update: only the fields present change."""
+        return self._req("PATCH", f"/exchanges/{urllib.parse.quote(exchange)}/orderbook-settings", patch)
+
+    # ── account (per connection) ─────────────────────────────────────────────
     def positions(self, connection_id: str) -> list[dict]:
-        return self._req("GET", "/positions" + self._qs(connectionId=connection_id))["positions"]
+        return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/positions")["positions"]
 
     def orders(self, connection_id: str) -> list[dict]:
-        return self._req("GET", "/orders" + self._qs(connectionId=connection_id))["orders"]
+        return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/orders")["orders"]
 
     def balance(self, connection_id: str) -> list[dict]:
-        return self._req("GET", "/balance" + self._qs(connectionId=connection_id))["balances"]
+        return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/balances")["balances"]
 
     # ── trading (per-connection grant required) ──────────────────────────────
     def place_order(
         self,
         connection_id: str,
-        exchange: str,
         symbol: str,
         side: str,
         type: str,  # noqa: A002 - matches the wire field
@@ -107,9 +125,12 @@ class ColibriClient:
         size_base: str | None = None,
         reduce_only: bool = False,
     ) -> dict:
+        """POST /connections/{id}/orders -> 202 {clientOrderId, status}.
+
+        The venue derives from the connection. side = BUY|SELL; type = Limit|Market.
+        Give EITHER size_quote (spend N quote) OR size_base (N coins); price for Limit only.
+        """
         body = {
-            "connectionId": connection_id,
-            "exchange": exchange,
             "symbol": symbol,
             "side": side,
             "type": type,
@@ -118,31 +139,48 @@ class ColibriClient:
             "sizeBase": size_base,
             "reduceOnly": reduce_only,
         }
-        return self._req("POST", "/orders", {k: v for k, v in body.items() if v is not None})
+        return self._req(
+            "POST",
+            f"/connections/{urllib.parse.quote(connection_id)}/orders",
+            {k: v for k, v in body.items() if v is not None},
+        )
 
-    def cancel_order(self, client_order_id: str, connection_id: str) -> dict:
-        return self._req("DELETE", f"/orders/{client_order_id}" + self._qs(connectionId=connection_id))
+    def cancel_order(self, connection_id: str, client_order_id: str, symbol: str) -> dict:
+        """DELETE /connections/{id}/orders/{clientOrderId}?symbol= — cancel one order (symbol required)."""
+        return self._req(
+            "DELETE",
+            f"/connections/{urllib.parse.quote(connection_id)}/orders/{urllib.parse.quote(client_order_id)}"
+            + self._qs(symbol=symbol),
+        )
 
-    def cancel_all(self, connection_id: str, exchange: str, symbol: str) -> dict:
-        return self._req("POST", "/orders/cancelAll", {"connectionId": connection_id, "exchange": exchange, "symbol": symbol})
+    def cancel_all(self, connection_id: str, symbol: str | None = None) -> dict:
+        """DELETE /connections/{id}/orders[?symbol=] — bulk cancel: one symbol, or the whole account when omitted."""
+        return self._req("DELETE", f"/connections/{urllib.parse.quote(connection_id)}/orders" + self._qs(symbol=symbol))
 
-    def cancel_all_orders(self, connection_id: str | None = None) -> dict:
-        """Account-wide: cancel every order (regular + triggers) — one account, or every granted one when omitted."""
-        return self._req("POST", "/orders/cancel-all-orders", {"connectionId": connection_id})
+    def close_positions(self, connection_id: str) -> dict:
+        """DELETE /connections/{id}/positions — close every position + cancel leftovers on one connection."""
+        return self._req("DELETE", f"/connections/{urllib.parse.quote(connection_id)}/positions")
 
-    def close_all_positions(self, connection_id: str | None = None) -> dict:
-        """Account-wide: close every position + cancel leftovers — one account, or every granted one when omitted."""
-        return self._req("POST", "/orders/close-all-positions", {"connectionId": connection_id})
+    def cancel_all_orders(self) -> dict:
+        """DELETE /orders — emergency sweep: cancel every order on EVERY granted account."""
+        return self._req("DELETE", "/orders")
+
+    def close_all_positions(self) -> dict:
+        """DELETE /positions — emergency sweep: close every position on EVERY granted account."""
+        return self._req("DELETE", "/positions")
 
     # ── app bridge ───────────────────────────────────────────────────────────
     def open_symbol(self, exchange: str, symbol: str, connection_id: str | None = None, views: list[str] | None = None) -> dict:
-        """Open ONE coin in the ACTIVE tab + surface the window — a panel add (201, returns the
-        created slot). connection_id is grant-gated; views default to ["orderbook"]."""
-        body = {"exchange": exchange, "symbol": symbol, "connectionId": connection_id, "views": views}
-        return self._req("POST", "/app/open-symbol", {k: v for k, v in body.items() if v is not None})
+        """Open ONE coin in the ACTIVE tab + surface the window — a convenience wrapper over
+        add_panel(activate=True). connection_id is grant-gated; views default to ["orderbook"]."""
+        content: dict[str, Any] = {"exchange": exchange, "symbol": symbol, "views": views or ["orderbook"]}
+        if connection_id is not None:
+            content["connectionId"] = connection_id
+        return self.add_panel(content, activate=True)
 
     def open_combo(self, symbol: str, target: str = "window") -> dict:
-        return self._req("POST", "/app/open-combo", {"symbol": symbol, "target": target})
+        """POST /app/combos — fan the coin across every connection that lists it. target: tab|window."""
+        return self._req("POST", "/app/combos", {"symbol": symbol, "target": target})
 
     # ── panel control (/app/panels) ──────────────────────────────────────────
     # A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
@@ -152,21 +190,20 @@ class ColibriClient:
     # connectionId binds a trading account (grant-gated; requires the orderbook view); omitted =
     # the app adopts the venue's default connection by itself.
 
-    def exchanges(self) -> list[dict]:
-        """The venue catalog — 'id' is the string every exchange param accepts; trading=False = view-only."""
-        return self._req("GET", "/exchanges")["exchanges"]
-
     def panels(self, tab_id: str | None = None, window_index: int | None = None) -> list[dict]:
         """The window → tab → slot tree, optionally scoped to one tab (durable id) / window (index)."""
         return self._req("GET", "/app/panels" + self._qs(tabId=tab_id, windowIndex=window_index))["windows"]
 
-    def add_panel(self, content: dict | None = None, tab_id: str | None = None) -> dict:
+    def add_panel(self, content: dict | None = None, tab_id: str | None = None, activate: bool = False) -> dict:
         """Add a panel to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id).
 
         content=None adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
-        set_panel (each empty add reserves a fresh box).
+        set_panel (each empty add reserves a fresh box). activate=True surfaces the terminal window
+        afterwards (default False so a background layout tool never steals focus).
         """
-        body = {"tabId": tab_id, "content": content}
+        body: dict[str, Any] = {"tabId": tab_id, "content": content}
+        if activate:
+            body["activate"] = True
         return self._req("POST", "/app/panels", {k: v for k, v in body.items() if v is not None})
 
     def set_panel(self, slot_id: str, content: dict | None = None) -> dict:
@@ -182,26 +219,54 @@ class ColibriClient:
 
     # ── notifications & signals ──────────────────────────────────────────────
     def notify(self, message: str, severity: str = "info", source: str | None = None) -> dict:
+        """POST /notifications — raise a toast. severity: info|success|warning|error."""
         return self._req("POST", "/notifications", {"message": message, "severity": severity, "source": source})
 
     def signal(self, exchange: str, symbol: str, text: str) -> dict:
         return self._req("POST", "/signals", {"exchange": exchange, "symbol": symbol, "text": text})
 
     # ── signal levels ────────────────────────────────────────────────────────
-    def signal_levels(self, exchange: str | None = None, symbol: str | None = None) -> list[dict]:
-        return self._req("GET", "/signal-levels" + self._qs(exchange=exchange, symbol=symbol))["levels"]
+    def signal_levels(
+        self, exchange: str | None = None, symbol: str | None = None, connection_id: str | None = None
+    ) -> list[dict]:
+        """GET /signal-levels — filter by venue / symbol / owning connection."""
+        return self._req("GET", "/signal-levels" + self._qs(exchange=exchange, symbol=symbol, connectionId=connection_id))["levels"]
 
     def create_signal_level(
-        self, exchange: str, symbol: str, price: str, direction: str = "cross", note: str | None = None, one_shot: bool = False
+        self,
+        exchange: str,
+        symbol: str,
+        price: str,
+        direction: str = "cross",
+        note: str | None = None,
+        one_shot: bool = False,
+        connection_id: str | None = None,
     ) -> dict:
-        return self._req(
-            "POST",
-            "/signal-levels",
-            {"exchange": exchange, "symbol": symbol, "price": price, "direction": direction, "note": note, "oneShot": one_shot},
-        )
+        """POST /signal-levels -> 201. A level fires at most once: one_shot removes it on fire, else it
+        is kept marked isTriggered (sweep with delete_triggered_signal_levels). connection_id
+        optionally ties the level to a connection (organizational — no trading grant needed)."""
+        body = {
+            "exchange": exchange,
+            "symbol": symbol,
+            "price": price,
+            "direction": direction,
+            "note": note,
+            "oneShot": one_shot,
+            "connectionId": connection_id,
+        }
+        return self._req("POST", "/signal-levels", {k: v for k, v in body.items() if v is not None})
 
-    def delete_signal_level(self, level_id: str) -> None:
-        self._req("DELETE", f"/signal-levels/{level_id}")
+    def delete_signal_level(self, level_id: str) -> dict:
+        """DELETE /signal-levels/{id} -> {removed: 1}."""
+        return self._req("DELETE", f"/signal-levels/{level_id}")
+
+    def delete_signal_levels(self, exchange: str, symbol: str) -> dict:
+        """DELETE /signal-levels?exchange=&symbol= — clear every level of one symbol -> {removed}."""
+        return self._req("DELETE", "/signal-levels" + self._qs(exchange=exchange, symbol=symbol))
+
+    def delete_triggered_signal_levels(self) -> dict:
+        """DELETE /signal-levels/triggered — sweep every fired level -> {removed}."""
+        return self._req("DELETE", "/signal-levels/triggered")
 
     # ── streaming ────────────────────────────────────────────────────────────
     def stream(self) -> "ColibriSocket":

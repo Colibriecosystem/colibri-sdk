@@ -20,17 +20,17 @@ if (!conn) {
 // GET /connections/{id}
 console.log("\ndetail:", await client.connection(conn.id));
 
-// GET /positions?connectionId=
+// GET /connections/{id}/positions
 const positions = await client.positions(conn.id);
 console.log(`\npositions (${positions.length}):`);
 for (const p of positions) console.log(`  ${p.symbol}  ${p.side} ${p.quantity} @ ${p.entryPrice}`);
 
-// GET /orders?connectionId=  — open orders incl. triggers
+// GET /connections/{id}/orders  — open orders incl. triggers
 const orders = await client.orders(conn.id);
 console.log(`\nopen orders (${orders.length}):`);
 for (const o of orders) console.log(`  ${o.clientOrderId}  ${o.side} ${o.type} ${o.quantity} @ ${o.price}  ${o.status}`);
 
-// GET /balance?connectionId=
+// GET /connections/{id}/balances
 const balances = await client.balance(conn.id);
 console.log(`\nbalances (${balances.length}):`);
 for (const b of balances.slice(0, 8)) console.log(`  ${b.asset}: free=${b.free}  locked=${b.locked}`);
