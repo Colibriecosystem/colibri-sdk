@@ -110,7 +110,14 @@
       "http://127.0.0.1:" + port(),
     );
   }
-  applySpec();
+  // The spec loads async, so Elements' router resolves a deep-link hash
+  // (#/operations/…) before the routes exist and falls back to #/ — restore it.
+  const wantedHash = location.hash;
+  applySpec().then(() => {
+    if (wantedHash && wantedHash !== "#/" && location.hash === "#/") {
+      setTimeout(() => { location.hash = wantedHash; }, 200);
+    }
+  });
 
   let debounce = 0;
   const flashOk = () => {
@@ -125,7 +132,27 @@
   tokenInput.addEventListener("input", () => {
     localStorage.setItem("colibri.token", tokenInput.value.trim());
     flashOk();
+    maskTokenBoxes();
   });
+
+  // With a global token saved, each operation's per-request Token box shows a
+  // masked "••••••••" placeholder (typing there still overrides the global one).
+  const MASKED = "••••••••";
+  function maskTokenBoxes() {
+    const want = token() ? MASKED : "123";
+    const hint = token()
+      ? "Global token applied (topbar) — type here to override for this request"
+      : "";
+    document.querySelectorAll('#docs input[aria-label="Token"]').forEach((inp) => {
+      if (inp.placeholder !== want) inp.placeholder = want;
+      if (inp.title !== hint) inp.title = hint;
+    });
+  }
+  let maskTimer = 0;
+  new MutationObserver(() => {
+    clearTimeout(maskTimer);
+    maskTimer = setTimeout(maskTokenBoxes, 120);
+  }).observe(document.getElementById("docs"), { childList: true, subtree: true });
 
   // Attach the saved token to every Try It request that goes to the loopback API
   // and doesn't already carry an Authorization header (an explicitly typed
