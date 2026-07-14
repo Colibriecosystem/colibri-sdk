@@ -4,9 +4,11 @@ The Colibri Local API is a loopback HTTP/1.1 + WebSocket API that lets an extern
 or bot read the order book, stream trades, and trade — talking to a **running Colibri terminal** over
 `127.0.0.1`. Keys never leave the terminal; the process boundary isolates them.
 
-> **Full reference:** the machine-readable contract is [`openapi.yaml`](openapi.yaml), rendered as an
-> interactive Scalar page at <https://colibriecosystem.github.io/colibri-sdk/> — every operation,
-> parameter, schema, and error code, with a live *try-it* console. This file keeps only the
+> **Full reference:** the machine-readable REST contract is [`openapi.yaml`](openapi.yaml), rendered
+> interactively at <https://colibriecosystem.github.io/colibri-sdk/> (Stoplight Elements — every
+> operation, parameter, schema, and error code, with an inline *try-it* console). The WebSocket
+> `/stream` protocol is its own AsyncAPI document, [`asyncapi.yaml`](asyncapi.yaml), rendered at
+> <https://colibriecosystem.github.io/colibri-sdk/ws.html>. This file keeps only the
 > connection/auth basics and a route summary.
 
 ---
@@ -14,7 +16,7 @@ or bot read the order book, stream trades, and trade — talking to a **running 
 ## Connecting
 
 1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access token**.
-   Tick **“Allow web browser access”** if the widget runs in a browser (the Scalar page's try-it
+   Tick **“Allow web browser access”** if the widget runs in a browser (the reference page's try-it
    console needs it too).
 2. **Discovery file** (native clients): the terminal writes
    `%APPDATA%\Colibri\localapi.json` = `{ "port", "token", "apiVersion", "pid" }` while the API is on,

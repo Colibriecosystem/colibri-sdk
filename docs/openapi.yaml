@@ -67,7 +67,9 @@ info:
 
     ## WebSocket — `/stream`
 
-    OpenAPI does not model WebSockets, so the live-streaming protocol is summarized here.
+    OpenAPI does not model WebSockets — the full `/stream` contract is its own **AsyncAPI**
+    document ([`asyncapi.yaml`](./asyncapi.yaml), rendered at [`./ws.html`](./ws.html)).
+    Summary:
 
     Upgrade `GET /stream` (token via the `Authorization` header, or `?access_token=` for browsers).
     Then exchange JSON text frames:

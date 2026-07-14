@@ -1,0 +1,510 @@
+asyncapi: 2.6.0
+
+# ── Colibri Local API — WebSocket /stream (AsyncAPI) ────────────────────────
+# OpenAPI cannot model WebSockets, so the live-streaming protocol is specified
+# here (rendered at ./ws.html). The REST surface lives in ./openapi.yaml.
+# Payload shapes mirror the REST schemas — both transports emit byte-identical
+# market shapes.
+
+info:
+  title: Colibri Local API — WebSocket stream
+  version: "1.0.0"
+  description: >-
+    The live-streaming half of the Colibri **Local API** — a single WebSocket at
+    `GET /stream` multiplexing every channel over one socket.
+
+
+    **Connect**: upgrade `GET /stream` with the bearer token in the `Authorization`
+    header, or `?access_token=<token>` for browsers. The port + token come from the
+    discovery file (`%APPDATA%\Colibri\localapi.json`) or Settings → Program → Local API.
+
+
+    **Envelope**: every frame is a JSON text message `{"type": "...", "data": {...},
+    "id": "..."}` — `id` is optional on requests and echoed back on the matching ack
+    or error.
+
+
+    **Channels** (all multiplexed on the one socket):
+
+    | Channel | Keyed by | Extra params | Delivery |
+    |---|---|---|---|
+    | `book` | `exchange` + `symbol` | `hz` (1–10, default 10), `depth` (1–500, default 50) | throttled **full snapshots**, sent only when the book changed |
+    | `trades` | `exchange` + `symbol` | — | **incremental** — batches of new prints, oldest → newest |
+    | `funding` | `exchange` + `symbol` | — | pushed on change |
+    | `positions` / `orders` / `balance` | `connectionId` | — | **full snapshot** pushed on change (same shape as the matching REST response) |
+    | `notifications` | — (app-wide) | — | terminal notifications (secret-free); a bounded backlog replays AFTER the ack, then live |
+    | `signalLevels` | — (app-wide) | — | `placed` / `removed` / `triggered` events; the current set replays as `placed` AFTER the ack |
+
+
+    **Backpressure**: market frames (`book` / `trades` / `funding` and the account
+    snapshots) are droppable **latest-wins**; acks, errors, notifications, and
+    signal-level events ride a reliable lane — a client that stops reading is
+    disconnected rather than silently starved.
+  license:
+    name: MIT
+
+defaultContentType: application/json
+
+servers:
+  local:
+    url: ws://127.0.0.1:18845/stream
+    protocol: ws
+    description: >-
+      Loopback only. 18845 is the preferred default port — the terminal walks to a
+      free port when it is taken, so read the real port from the discovery file
+      (%APPDATA%\Colibri\localapi.json). Authenticate with `Authorization: Bearer
+      <token>` or `?access_token=<token>` (browsers).
+
+channels:
+  /stream:
+    description: >-
+      The one WebSocket endpoint. App-level channels are selected per subscription
+      via the `channel` field of a `subscribe` frame — there is no per-channel URL.
+    publish:
+      operationId: sendRequest
+      summary: "Client → server: subscribe / unsubscribe"
+      description: >-
+        Market channels address by `exchange` + `symbol`; the account channels
+        (`positions` / `orders` / `balance`) address by `connectionId` instead;
+        `notifications` and `signalLevels` are app-wide (no key). Unsubscribe with
+        the same identity you subscribed with.
+      message:
+        oneOf:
+          - $ref: "#/components/messages/subscribe"
+          - $ref: "#/components/messages/unsubscribe"
+    subscribe:
+      operationId: receiveFrame
+      summary: "Server → client: acks, errors, and data frames"
+      message:
+        oneOf:
+          - $ref: "#/components/messages/subscribed"
+          - $ref: "#/components/messages/unsubscribed"
+          - $ref: "#/components/messages/error"
+          - $ref: "#/components/messages/book"
+          - $ref: "#/components/messages/trades"
+          - $ref: "#/components/messages/funding"
+          - $ref: "#/components/messages/positions"
+          - $ref: "#/components/messages/orders"
+          - $ref: "#/components/messages/balance"
+          - $ref: "#/components/messages/notification"
+          - $ref: "#/components/messages/signalLevel"
+
+components:
+  messages:
+    subscribe:
+      name: subscribe
+      title: subscribe (request)
+      summary: Open one app-level channel subscription.
+      payload:
+        $ref: "#/components/schemas/StreamRequest"
+      examples:
+        - name: trades
+          summary: Subscribe to the trade prints of one symbol
+          payload:
+            type: subscribe
+            data: { channel: trades, exchange: BinanceSpot, symbol: BTCUSDT }
+            id: "1"
+        - name: book
+          summary: Throttled book snapshots, 5 Hz, 20 levels/side
+          payload:
+            type: subscribe
+            data: { channel: book, exchange: BinanceSpot, symbol: BTCUSDT, hz: 5, depth: 20 }
+            id: "2"
+        - name: positions
+          summary: Account channel — keyed by connectionId
+          payload:
+            type: subscribe
+            data: { channel: positions, connectionId: 7f3c2e10a4b94d0f }
+            id: "3"
+
+    unsubscribe:
+      name: unsubscribe
+      title: unsubscribe (request)
+      summary: Close a subscription (same identity as the subscribe).
+      payload:
+        $ref: "#/components/schemas/StreamRequest"
+      examples:
+        - payload:
+            type: unsubscribe
+            data: { channel: trades, exchange: BinanceSpot, symbol: BTCUSDT }
+            id: "4"
+
+    subscribed:
+      name: subscribed
+      title: subscribed (ack)
+      summary: Echo of an accepted subscribe — `id` matches the request.
+      payload:
+        $ref: "#/components/schemas/StreamAck"
+      examples:
+        - payload:
+            type: subscribed
+            data: { channel: trades, exchange: BinanceSpot, symbol: BTCUSDT }
+            id: "1"
+
+    unsubscribed:
+      name: unsubscribed
+      title: unsubscribed (ack)
+      payload:
+        $ref: "#/components/schemas/StreamAck"
+
+    error:
+      name: error
+      title: error
+      summary: A rejected request — `id` matches the request when it carried one.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: error }
+          data:
+            type: object
+            required: [code, message]
+            properties:
+              code:
+                type: string
+                description: Machine code (`bad_request`, `unknown_connection`, `unavailable`, …).
+              message: { type: string }
+          id: { type: [string, "null"] }
+      examples:
+        - payload:
+            type: error
+            data: { code: bad_request, message: "Unknown channel." }
+            id: "1"
+
+    book:
+      name: book
+      title: book (data)
+      summary: >-
+        Throttled FULL order-book snapshot (per the subscription's `hz`/`depth`), sent
+        only when the book changed. `data` is the same shape as `GET
+        /markets/{exchange}/{symbol}/book`.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: book }
+          data:
+            $ref: "#/components/schemas/Book"
+
+    trades:
+      name: trades
+      title: trades (data)
+      summary: >-
+        INCREMENTAL — a batch of new prints accumulated within one pump tick,
+        oldest → newest (unlike the REST endpoint, which returns a recent window).
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: trades }
+          data:
+            type: object
+            required: [exchange, symbol, trades]
+            properties:
+              exchange: { type: string }
+              symbol: { type: string }
+              trades:
+                type: array
+                items:
+                  type: object
+                  required: [price, qty, isBuy, timeMs]
+                  properties:
+                    price: { type: string, description: Decimal string. }
+                    qty: { type: string, description: Base-coin quantity (decimal string). }
+                    isBuy: { type: boolean, description: true = buyer-aggressor. }
+                    timeMs: { type: integer, format: int64, description: Exchange time, unix ms. }
+      examples:
+        - payload:
+            type: trades
+            data:
+              exchange: BinanceSpot
+              symbol: BTCUSDT
+              trades:
+                - { price: "97012.50", qty: "0.0140", isBuy: true, timeMs: 1767052800123 }
+
+    funding:
+      name: funding
+      title: funding (data)
+      summary: >-
+        Pushed on change. `data` is the same shape as `GET
+        /markets/{exchange}/{symbol}/funding`.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: funding }
+          data:
+            $ref: "#/components/schemas/Funding"
+
+    positions:
+      name: positions
+      title: positions (data)
+      summary: >-
+        FULL snapshot of the connection's open positions, pushed on change. `data` is
+        the same shape as `GET /connections/{id}/positions`.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: positions }
+          data:
+            $ref: "#/components/schemas/PositionsData"
+
+    orders:
+      name: orders
+      title: orders (data)
+      summary: >-
+        FULL snapshot of the connection's active orders, pushed on change — this is
+        also where the exchange confirmation of a `202`-accepted REST mutation lands.
+        `data` is the same shape as `GET /connections/{id}/orders`.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: orders }
+          data:
+            $ref: "#/components/schemas/OrdersData"
+
+    balance:
+      name: balance
+      title: balance (data)
+      summary: >-
+        FULL snapshot of the connection's balances, pushed on change. `data` is the
+        same shape as `GET /connections/{id}/balances`.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: balance }
+          data:
+            $ref: "#/components/schemas/BalanceData"
+
+    notification:
+      name: notification
+      title: notification (event)
+      summary: >-
+        A terminal notification (secret-free — the credential-bearing profile is
+        reduced to `connectionId` + `connectionLabel`). On subscribe a bounded
+        backlog replays AFTER the ack, then live events follow. Reliable lane —
+        never dropped under backpressure.
+      payload:
+        type: object
+        required: [type, data]
+        properties:
+          type: { type: string, const: notification }
+          data:
+            type: object
+            required: [kind, severity, message]
+            properties:
+              kind: { type: string, description: NotificationKind name (e.g. OrderFilled). }
+              severity: { type: string, description: info | success | warning | error. }
+              message: { type: string }
+              symbol: { type: [string, "null"] }
+              connectionId: { type: [string, "null"] }
+              connectionLabel: { type: [string, "null"] }
+
+    signalLevel:
+      name: signalLevel
+      title: signalLevel (event)
+      summary: >-
+        Signal-level lifecycle — the one frame with a top-level `event` field:
+        `placed` | `removed` | `triggered`. On subscribe the current set replays as
+        `placed` events AFTER the ack. Reliable lane — never dropped.
+      payload:
+        type: object
+        required: [type, event, data]
+        properties:
+          type: { type: string, const: signalLevel }
+          event:
+            type: string
+            enum: [placed, removed, triggered]
+          data:
+            $ref: "#/components/schemas/SignalLevel"
+      examples:
+        - payload:
+            type: signalLevel
+            event: triggered
+            data:
+              id: 9c1f2ab34d5e6f70
+              exchange: BinanceSpot
+              symbol: BTCUSDT
+              price: "97000"
+              direction: Above
+              note: breakout watch
+              oneShot: false
+              createdMs: 1767052000000
+              isTriggered: true
+              triggeredMs: 1767052800123
+
+  schemas:
+    StreamRequest:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          type: string
+          enum: [subscribe, unsubscribe]
+        data:
+          type: object
+          required: [channel]
+          properties:
+            channel:
+              type: string
+              enum: [book, trades, funding, positions, orders, balance, notifications, signalLevels]
+            exchange:
+              type: string
+              description: Market channels only — a venue id from `GET /exchanges`.
+            symbol:
+              type: string
+              description: Market channels only.
+            hz:
+              type: integer
+              minimum: 1
+              maximum: 10
+              default: 10
+              description: "`book` only — snapshot rate."
+            depth:
+              type: integer
+              minimum: 1
+              maximum: 500
+              default: 50
+              description: "`book` only — levels per side."
+            connectionId:
+              type: string
+              description: Account channels (`positions` / `orders` / `balance`) only.
+        id:
+          type: string
+          description: Optional correlation id, echoed on the ack / error.
+
+    StreamAck:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          type: string
+          enum: [subscribed, unsubscribed]
+        data:
+          type: object
+          required: [channel]
+          properties:
+            channel: { type: string }
+            exchange: { type: string, description: Empty for account / app-wide channels. }
+            symbol: { type: string, description: Empty for account / app-wide channels. }
+        id: { type: [string, "null"] }
+
+    BookLevel:
+      type: object
+      description: One order-book level in BOTH units (dual-unit contract).
+      required: [price, baseQty, usdVolume]
+      properties:
+        price: { type: string, description: Level price (decimal string). }
+        baseQty: { type: string, description: Resting quantity, base units (decimal string). }
+        usdVolume: { type: string, description: Resting volume, USD (decimal string). }
+
+    Book:
+      type: object
+      description: >-
+        An order-book snapshot — asks ascending, bids descending, capped at the
+        subscription's `depth`. Identical to the REST `GET …/book` response.
+      required: [exchange, symbol, tickSize, lastPrice, bestBid, bestAsk, bids, asks]
+      properties:
+        exchange: { type: string }
+        symbol: { type: string }
+        tickSize: { type: string, description: Price tick size (decimal string). }
+        lastPrice: { type: string, description: Last traded price ("0" before the first trade). }
+        bestBid: { type: [string, "null"] }
+        bestAsk: { type: [string, "null"] }
+        bids:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+        asks:
+          type: array
+          items:
+            $ref: "#/components/schemas/BookLevel"
+
+    Funding:
+      type: object
+      description: Perp funding. Identical to the REST `GET …/funding` response.
+      required: [exchange, symbol, rate, nextFundingTimeMs]
+      properties:
+        exchange: { type: string }
+        symbol: { type: string }
+        rate: { type: string, description: Funding rate, decimal string ("0.0001" = 0.01%). }
+        nextFundingTimeMs: { type: integer, format: int64 }
+
+    PositionsData:
+      type: object
+      description: Identical to the REST `GET /connections/{id}/positions` response.
+      required: [connectionId, positions]
+      properties:
+        connectionId: { type: string }
+        positions:
+          type: array
+          items:
+            type: object
+            required: [symbol, exchange, side, quantity, entryPrice]
+            properties:
+              symbol: { type: string }
+              exchange: { type: string }
+              side: { type: string, description: "`LONG` / `SHORT`." }
+              quantity: { type: string, description: SIGNED base quantity (positive = long). }
+              entryPrice: { type: string }
+
+    OrdersData:
+      type: object
+      description: Identical to the REST `GET /connections/{id}/orders` response.
+      required: [connectionId, orders]
+      properties:
+        connectionId: { type: string }
+        orders:
+          type: array
+          items:
+            type: object
+            required: [clientOrderId, exchangeOrderId, symbol, exchange, side, type, status, price, quantity, filledQuantity]
+            properties:
+              clientOrderId: { type: string, description: The cancel handle. }
+              exchangeOrderId: { type: [string, "null"] }
+              symbol: { type: string }
+              exchange: { type: string }
+              side: { type: string, description: "`BUY` / `SELL`." }
+              type: { type: string, description: Order type name (`Limit`, `Market`, `StopLoss`, …). }
+              status: { type: string, description: Order status name (`New`, `PartiallyFilled`, …). }
+              price: { type: string }
+              quantity: { type: string, description: Base units. }
+              filledQuantity: { type: string, description: Base units. }
+
+    BalanceData:
+      type: object
+      description: Identical to the REST `GET /connections/{id}/balances` response.
+      required: [connectionId, balances]
+      properties:
+        connectionId: { type: string }
+        balances:
+          type: array
+          items:
+            type: object
+            required: [asset, free, locked]
+            properties:
+              asset: { type: string }
+              free: { type: string }
+              locked: { type: string }
+
+    SignalLevel:
+      type: object
+      description: >-
+        One API-owned price alert (identical to the REST shape). Fires at most once;
+        a fired non-one-shot level is KEPT with `isTriggered` + `triggeredMs` until
+        swept via `DELETE /signal-levels/triggered`.
+      required: [id, exchange, symbol, price, direction, note, oneShot, createdMs, isTriggered, triggeredMs]
+      properties:
+        id: { type: string }
+        exchange: { type: string }
+        symbol: { type: string }
+        price: { type: string }
+        direction: { type: string, enum: [Above, Below, Cross] }
+        note: { type: [string, "null"] }
+        oneShot: { type: boolean }
+        createdMs: { type: integer, format: int64 }
+        isTriggered: { type: boolean }
+        triggeredMs: { type: [integer, "null"], format: int64 }

@@ -7,8 +7,11 @@ The Local API is a loopback HTTP + WebSocket API exposed by the Colibri scalping
 an external process that talks to *your own* running terminal over `127.0.0.1`, guarded by a bearer
 token — keys never leave the app.
 
-- **Interactive API reference (Scalar):** <https://colibriecosystem.github.io/colibri-sdk/> — rendered
-  from [`docs/openapi.yaml`](docs/openapi.yaml), the machine-readable contract
+- **Interactive REST reference:** <https://colibriecosystem.github.io/colibri-sdk/> — Stoplight
+  Elements (three-panel docs + inline try-it) rendered from
+  [`docs/openapi.yaml`](docs/openapi.yaml), the machine-readable contract
+- **WebSocket reference:** <https://colibriecosystem.github.io/colibri-sdk/ws.html> — AsyncAPI
+  rendering of [`docs/asyncapi.yaml`](docs/asyncapi.yaml), the `/stream` protocol
 - **Basics + route summary:** [`docs/Colibri-Api.md`](docs/Colibri-Api.md)
 
 ## Enable the API
