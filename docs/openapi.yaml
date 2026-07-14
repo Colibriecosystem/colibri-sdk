@@ -384,53 +384,6 @@ paths:
         "404":
           $ref: "#/components/responses/UnknownConnection"
 
-  /connections/{id}/positions:
-    get:
-      operationId: listPositions
-      tags: [Connections]
-      summary: Open positions
-      description: Open positions across the connection's registered symbols. Quantity is signed (positive = long).
-      parameters:
-        - $ref: "#/components/parameters/connectionIdPath"
-      responses:
-        "200":
-          description: The open positions.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PositionsResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/UnknownConnection"
-    delete:
-      operationId: closePositions
-      tags: [Trading]
-      summary: Close every position on the connection
-      description: >-
-        Close every open position at market + cancel leftover orders on this one connection (the
-        terminal's super-panic scope, one account). **Grant-gated.** Answers `202` — the commands
-        are enqueued; confirmation rides the WebSocket `orders` / `positions` channels.
-      parameters:
-        - $ref: "#/components/parameters/connectionIdPath"
-      responses:
-        "202":
-          description: Enqueued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CancelAccepted"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/TradingNotEnabled"
-        "404":
-          $ref: "#/components/responses/UnknownConnection"
-        "503":
-          $ref: "#/components/responses/NotReady"
-
   /connections/{id}/orders:
     get:
       operationId: listOrders
@@ -547,6 +500,53 @@ paths:
           schema:
             type: string
           example: BTCUSDT
+      responses:
+        "202":
+          description: Enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "503":
+          $ref: "#/components/responses/NotReady"
+
+  /connections/{id}/positions:
+    get:
+      operationId: listPositions
+      tags: [Connections]
+      summary: Open positions
+      description: Open positions across the connection's registered symbols. Quantity is signed (positive = long).
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+      responses:
+        "200":
+          description: The open positions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PositionsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+    delete:
+      operationId: closePositions
+      tags: [Trading]
+      summary: Close every position on the connection
+      description: >-
+        Close every open position at market + cancel leftover orders on this one connection (the
+        terminal's close-all hotkey scope, one account). **Grant-gated.** Answers `202` — the
+        commands are enqueued; confirmation rides the WebSocket `orders` / `positions` channels.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
       responses:
         "202":
           description: Enqueued.
