@@ -2,7 +2,8 @@ import type { Channel, SubscribeParams } from "./types.js";
 
 export interface SocketOptions {
   base: string;
-  token: string;
+  /** Unused — `/stream` takes no credential. Kept so `new ColibriSocket({base, token})` still compiles. */
+  token?: string;
 }
 
 type Handler = (data: unknown, frame: StreamFrame) => void;
@@ -33,10 +34,10 @@ export class ColibriSocket {
 
   /** Resolves once the socket is open (queued subscribes are flushed automatically). */
   connect(): Promise<void> {
-    // Browsers can't set an Authorization header on a WS upgrade, so the token rides ?access_token=
-    // (Origin + Host are still checked server-side).
-    const url =
-      this.opts.base.replace(/^http/, "ws") + "/stream?access_token=" + encodeURIComponent(this.opts.token);
+    // No credential: nothing on this socket moves money, so every channel it carries is open.
+    // (Origin + Host are still checked server-side.) The old ?access_token= query is gone —
+    // the server ignores it, and a token in a URL leaks into logs and history.
+    const url = this.opts.base.replace(/^http/, "ws") + "/stream";
     const ws = new WebSocket(url);
     this.ws = ws;
 

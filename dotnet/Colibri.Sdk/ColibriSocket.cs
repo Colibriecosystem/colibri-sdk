@@ -9,8 +9,8 @@ public readonly record struct StreamFrame(string Type, string? Event, JsonElemen
 
 /// <summary>
 ///     WebSocket client for <c>/stream</c>. Subscribe to book / trades / funding / positions / orders /
-///     balance / notifications / signalLevels. The token rides <c>?access_token=</c> (browsers can't set
-///     the header; this client matches that path).
+///     balance / notifications / signalLevels. <b>No credential</b> — nothing on this socket moves money,
+///     so every channel it carries is open (the Origin and Host gates still guard it server-side).
 /// </summary>
 public sealed class ColibriSocket : IAsyncDisposable
 {
@@ -19,10 +19,15 @@ public sealed class ColibriSocket : IAsyncDisposable
     private readonly Dictionary<string, List<Action<StreamFrame>>> _handlers = new();
     private CancellationTokenSource? _cts;
 
-    public ColibriSocket(Uri httpBase, string token)
+    /// <param name="token">
+    ///     Accepted and ignored — kept so existing call sites compile. The old
+    ///     <c>?access_token=</c> query is gone: the server ignores it, and a token in a URL
+    ///     leaks into logs and browser history.
+    /// </param>
+    public ColibriSocket(Uri httpBase, string? token = null)
     {
         var scheme = httpBase.Scheme == "https" ? "wss" : "ws";
-        _url = new Uri($"{scheme}://{httpBase.Authority}/stream?access_token={Uri.EscapeDataString(token)}");
+        _url = new Uri($"{scheme}://{httpBase.Authority}/stream");
     }
 
     /// <summary>Register a handler for a channel name, "error", or "*" (every frame).</summary>

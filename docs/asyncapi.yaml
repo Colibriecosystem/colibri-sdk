@@ -14,9 +14,11 @@ info:
     `GET /stream` multiplexing every channel over one socket.
 
 
-    **Connect**: upgrade `GET /stream` with the bearer token in the `Authorization`
-    header, or `?access_token=<token>` for browsers. The port + token come from the
-    discovery file (`%APPDATA%\Colibri\localapi.json`) or Settings → Program → Local API.
+    **Connect**: upgrade `GET /stream` — **no token required**. Nothing on this socket
+    moves money (trading is REST-only), so every channel it carries is open, account
+    channels included. The Origin and Host gates still apply: a browser can only connect
+    when "Allow web browser access" is on. The port comes from the discovery file
+    (`%APPDATA%\Colibri\localapi.json`) or Settings → Program → Local API.
 
 
     **Envelope**: every frame is a JSON text message `{"type": "...", "data": {...},
@@ -52,8 +54,8 @@ servers:
     description: >-
       Loopback only. 18845 is the preferred default port — the terminal walks to a
       free port when it is taken, so read the real port from the discovery file
-      (%APPDATA%\Colibri\localapi.json). Authenticate with `Authorization: Bearer
-      <token>` or `?access_token=<token>` (browsers).
+      (%APPDATA%\Colibri\localapi.json). No authentication — the socket is open; the
+      Origin and Host gates are what guard it.
 
 channels:
   /stream:

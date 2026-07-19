@@ -11,24 +11,41 @@ public sealed class ColibriException(int status, string code, string message) : 
 }
 
 /// <summary>
-///     REST client for the Colibri Local API. Reads work with the token; trading needs a per-connection
-///     grant (Settings → Program → Local API). Every number on the wire is a decimal string.
+///     REST client for the Colibri Local API. Reads need no credential at all; <b>trading</b> needs the
+///     bearer token AND a per-connection grant (Settings → Program → Local API). Every number on the
+///     wire is a decimal string.
 /// </summary>
+/// <example>
+///     <code>
+///     using var readOnly = new ColibriClient(18845);              // screener / dashboard
+///     using var trader   = new ColibriClient(18845, "token…");    // can also place / cancel
+///     </code>
+/// </example>
 public sealed class ColibriClient : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
 
-    public ColibriClient(int port, string token, string host = "127.0.0.1")
+    /// <param name="token">
+    ///     Only needed to place or cancel orders. Omit it for a read-only client and no
+    ///     <c>Authorization</c> header is sent at all (a bare "Bearer " would be malformed).
+    /// </param>
+    public ColibriClient(int port, string? token = null, string host = "127.0.0.1")
     {
         _http = new HttpClient { BaseAddress = new Uri($"http://{host}:{port}") };
-        _http.DefaultRequestHeaders.Authorization = new("Bearer", token);
+        if (!string.IsNullOrEmpty(token))
+        {
+            _http.DefaultRequestHeaders.Authorization = new("Bearer", token);
+        }
+
         Base = _http.BaseAddress;
         Token = token;
     }
 
     public Uri Base { get; }
-    public string Token { get; }
+
+    /// <summary>The token this client was built with, or <c>null</c> for a read-only client.</summary>
+    public string? Token { get; }
 
     /// <summary>Auto-connect via the discovery file the terminal writes while the API is on.</summary>
     public static ColibriClient Discover(string host = "127.0.0.1")
@@ -84,7 +101,7 @@ public sealed class ColibriClient : IDisposable
     private static string E(string value) => Uri.EscapeDataString(value);
 
     // ── discovery / connections ──────────────────────────────────────────────
-    /// <summary>Liveness + version + the live bound port — the one token-free route.</summary>
+    /// <summary>Liveness + version + the live bound port.</summary>
     public Task<Ping> PingAsync(CancellationToken ct = default) => GetAsync<Ping>("/ping", ct);
 
     public async Task<IReadOnlyList<Connection>> ConnectionsAsync(CancellationToken ct = default) =>

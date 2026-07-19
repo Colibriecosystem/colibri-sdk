@@ -24,8 +24,12 @@ import type {
 export interface ColibriOptions {
   /** The port from Settings → Program → Local API (or the discovery file). */
   port: number | string;
-  /** The bearer token from the same place. */
-  token: string;
+  /**
+   * The bearer token from the same place. **Only needed to place or cancel orders** — every
+   * read, the panel/settings gestures, and the WebSocket are open. Omit it for a read-only
+   * widget and the client simply sends no `Authorization` header.
+   */
+  token?: string;
   /** Defaults to 127.0.0.1 — the API only ever binds loopback. */
   host?: string;
 }
@@ -45,8 +49,9 @@ export class ColibriError extends Error {
 const enc = encodeURIComponent;
 
 /**
- * REST client for the Colibri Local API. Reads work with just the token; trading needs a
- * per-connection grant (Settings → Program → Local API). All numbers on the wire are decimal strings.
+ * REST client for the Colibri Local API. Reads need no credential at all; **trading** needs the
+ * bearer token AND a per-connection grant (Settings → Program → Local API). All numbers on the
+ * wire are decimal strings.
  */
 export class ColibriClient {
   readonly base: string;
@@ -54,7 +59,7 @@ export class ColibriClient {
 
   constructor(opts: ColibriOptions) {
     this.base = `http://${opts.host ?? "127.0.0.1"}:${opts.port}`;
-    this.token = opts.token;
+    this.token = opts.token ?? "";
   }
 
   /**
@@ -74,7 +79,9 @@ export class ColibriClient {
     const res = await fetch(this.base + path, {
       method,
       headers: {
-        Authorization: `Bearer ${this.token}`,
+        // Omitted entirely when no token was supplied — open routes take no credential, and
+        // sending `Bearer ` would be a malformed header rather than "no auth".
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -89,7 +96,7 @@ export class ColibriClient {
   }
 
   // ── discovery ────────────────────────────────────────────────────────────
-  /** Liveness + version + the live bound port. The ONE token-free route. */
+  /** Liveness + version + the live bound port. */
   ping(): Promise<Ping> {
     return this.req("GET", "/ping");
   }

@@ -4,8 +4,9 @@ Official SDK for the **Colibri Local API** — read the order book, stream trade
 widget, screener, or bot. **JavaScript / TypeScript, Python, C#.**
 
 The Local API is a loopback HTTP + WebSocket API exposed by the Colibri scalping terminal. A widget is
-an external process that talks to *your own* running terminal over `127.0.0.1`, guarded by a bearer
-token — keys never leave the app.
+an external process that talks to *your own* running terminal over `127.0.0.1`. Reading and streaming
+need **no credential at all**; placing or cancelling orders needs a bearer token plus a per-connection
+grant. Exchange keys never leave the app.
 
 - **Interactive REST reference:** <https://colibriecosystem.github.io/colibri-sdk/> — Stoplight
   Elements (three-panel docs + inline try-it) rendered from
@@ -16,9 +17,9 @@ token — keys never leave the app.
 
 ## Enable the API
 
-In Colibri: **Settings → Program → Local API** → turn it on, copy the **port** + **access token**
-(tick **“Allow web browser access”** for a browser widget). Native SDKs auto-discover via
-`%APPDATA%\Colibri\localapi.json`.
+In Colibri: **Settings → Program → Local API** → turn it on and copy the **port**. Copy the **access
+token** too if your widget will trade (tick **“Allow web browser access”** for a browser widget).
+Native SDKs auto-discover both via `%APPDATA%\Colibri\localapi.json`.
 
 ## Quick start
 
@@ -27,7 +28,8 @@ In Colibri: **Settings → Program → Local API** → turn it on, copy the **po
 import { ColibriClient } from "@colibri/sdk";
 
 const client = await ColibriClient.discover();           // Node: reads the discovery file
-// or: new ColibriClient({ port: 18845, token: "…" })    // browser: paste port + token
+// or: new ColibriClient({ port: 18845 })                // read-only widget — no token needed
+// or: new ColibriClient({ port: 18845, token: "…" })    // + can place / cancel orders
 
 console.log(await client.ping());
 const book = await client.book("BinanceSpot", "BTCUSDT", { depth: 10 });
@@ -95,9 +97,19 @@ in `dotnet/Colibri.Sdk.Examples`):
 
 ## Security
 
-Loopback-only, token-guarded, three auth gates (Origin / Host / constant-time token). Reads need the
-token; trading needs an explicit per-connection grant. The token is trust between processes under your
-user account — treat it like a key.
+Loopback-only. Two gates run on every request and on the WebSocket upgrade: **Origin-reject**
+(browsers are blocked unless you tick "Allow web browser access") and a loopback **Host-check**
+(anti-DNS-rebinding).
+
+The **bearer token gates one thing: moving money** — placing an order, cancelling one, closing
+positions, and the two all-account sweeps. Trading needs an explicit **per-connection grant** on top,
+so a token alone cannot touch an account you never authorized.
+
+Everything else is open, including the account reads and the whole WebSocket. Know what that means:
+any process running as your Windows user can read your positions, PnL and balances and can move the
+terminal's windows around — and with browser access on, so can any site you have open. That is the
+deliberate trade-off for zero-friction widgets. Treat the token like a key; it is the wall around
+your money.
 
 ## License
 

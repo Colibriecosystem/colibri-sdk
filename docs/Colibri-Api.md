@@ -15,7 +15,8 @@ or bot read the order book, stream trades, and trade — talking to a **running 
 
 ## Connecting
 
-1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access token**.
+1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port**; the **access token**
+   is only needed if your widget places or cancels orders (see [Authentication](#authentication)).
    Tick **“Allow web browser access”** if the widget runs in a browser (the reference page's try-it
    console needs it too).
 2. **Discovery file** (native clients): the terminal writes
@@ -26,20 +27,38 @@ or bot read the order book, stream trades, and trade — talking to a **running 
 
 ## Authentication
 
-Every request except `GET /ping` carries the bearer token:
+**The bearer token gates one thing: moving money.** Six routes require it — everything else is open.
 
 ```
 Authorization: Bearer <token>
 ```
 
-Three gates run on each request/upgrade: **Origin-reject** (browsers blocked unless web access is on) →
-**Host-check** (anti-DNS-rebinding) → **constant-time token**. A browser WebSocket can't set the header,
-so `/stream` also accepts `?access_token=<token>`.
+| | Token | Grant |
+|---|---|---|
+| `POST /connections/{id}/orders` | ✅ | ✅ |
+| `DELETE /connections/{id}/orders/{clientOrderId}` | ✅ | ✅ |
+| `DELETE /connections/{id}/orders` | ✅ | ✅ |
+| `DELETE /connections/{id}/positions` | ✅ | ✅ |
+| `DELETE /orders` (sweep) | ✅ | ✅ |
+| `DELETE /positions` (sweep) | ✅ | ✅ |
+| **everything else** | — | — |
 
-- **Reads** work with just the token.
-- **Trading** additionally needs a **per-connection grant** (Settings → Program → Local API), so a widget
-  holding the token can't trade an account you never authorized. A connection is bound to exactly one
-  venue — the exchange always derives FROM the connection, never a request parameter.
+Open means genuinely open — no credential at all: market data, the venue catalog, orderbook settings,
+panel + combo control, notifications, market signals, price alerts, the entire `/stream` WebSocket,
+and the **account reads** (`GET /connections/{id}/positions` / `/orders` / `/balances`). A read-only
+widget — a screener, a dashboard, a PnL ticker — needs no token whatsoever.
+
+Two gates still run on **every** request and on the WebSocket upgrade: **Origin-reject** (browsers are
+blocked unless "Allow web browser access" is on) → **Host-check** (anti-DNS-rebinding). So with the
+browser toggle off, the open surface is reachable by native local processes only.
+
+- **Trading** additionally needs a **per-connection grant** (Settings → Program → Local API), so a
+  widget holding the token still can't trade an account you never authorized. A connection is bound to
+  exactly one venue — the exchange always derives FROM the connection, never a request parameter.
+- **Know what "open" costs you.** Any process running as your Windows user can read your positions,
+  PnL and balances, and can move the terminal's windows around. With browser access enabled, so can
+  any site you have open. That is the deliberate trade-off for zero-friction widgets; the money stays
+  behind the token and the grant.
 
 ## Numbers & errors
 
@@ -63,7 +82,7 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/ping` | `{name, version, apiVersion, port}` — the one token-free route |
+| GET | `/ping` | `{name, version, apiVersion, port}` — liveness + the live bound port |
 | GET | `/exchanges` | the venue catalog — `id` is the string every `{exchange}` accepts; `trading:false` = view-only venue |
 | GET | `/exchanges/{exchange}/symbols` | the venue's symbol universe + metadata |
 | GET | `/markets/{exchange}/{symbol}/book` | `?depth=` (1–500). Dual-unit book snapshot |

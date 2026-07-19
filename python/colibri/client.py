@@ -22,13 +22,16 @@ class ColibriClient:
     """
     Talk to a running Colibri terminal over the loopback Local API.
 
-    Reads work with just the token; trading needs a per-connection grant
-    (Settings -> Program -> Local API). Every price/size on the wire is a decimal STRING.
+    Reads need no credential at all. **Trading** needs the bearer token AND a per-connection
+    grant (Settings -> Program -> Local API). Every price/size on the wire is a decimal STRING.
+
+    >>> ColibriClient(18845)                 # read-only widget: no token
+    >>> ColibriClient(18845, token="...")    # can also place / cancel orders
     """
 
-    def __init__(self, port: int | str, token: str, host: str = "127.0.0.1") -> None:
+    def __init__(self, port: int | str, token: str | None = None, host: str = "127.0.0.1") -> None:
         self.base = f"http://{host}:{port}"
-        self._token = token
+        self._token = token or ""
 
     @classmethod
     def discover(cls, host: str = "127.0.0.1") -> "ColibriClient":
@@ -42,7 +45,9 @@ class ColibriClient:
     # ── transport ────────────────────────────────────────────────────────────
     def _req(self, method: str, path: str, body: Any | None = None) -> Any:
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Authorization": f"Bearer {self._token}"}
+        # Omitted entirely without a token — open routes take no credential, and a bare
+        # "Bearer " is a malformed header rather than "no auth".
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
@@ -63,7 +68,7 @@ class ColibriClient:
 
     # ── discovery ────────────────────────────────────────────────────────────
     def ping(self) -> dict:
-        """Liveness + version + the live bound port — the one token-free route."""
+        """Liveness + version + the live bound port."""
         return self._req("GET", "/ping")
 
     # ── connections ──────────────────────────────────────────────────────────

@@ -14,9 +14,11 @@
   GLOBAL PORT + TOKEN (topbar, saved in localStorage on this machine):
   - Port rewrites the spec's server URL before rendering, so every displayed URL,
     request sample, and "Try It" call targets http://127.0.0.1:<port>.
-  - Token is auto-attached as "Authorization: Bearer <token>" to every Try It
-    request via a fetch interceptor; a token typed into an operation's own auth
-    field takes precedence. Nothing is ever sent anywhere but 127.0.0.1.
+  - Token is OPTIONAL: only the six money-moving operations require it, so Try It
+    works on everything else with the box left empty. When set, it is auto-attached
+    as "Authorization: Bearer <token>" via a fetch interceptor (which no-ops on an
+    empty box); a token typed into an operation's own auth field takes precedence.
+    Nothing is ever sent anywhere but 127.0.0.1.
 
   NOTE: "Try It" talks to YOUR running terminal — tick "Allow web browser access"
   in Settings -> Program -> Local API (browser requests carry an Origin header).
@@ -83,8 +85,8 @@
   <span class="cfg" title="Your terminal's Local API port (Settings → Program → Local API). Rewrites every URL + Try It target.">
     Port <input id="cfg-port" type="text" inputmode="numeric" placeholder="18845" />
   </span>
-  <span class="cfg" title="Your access token — auto-attached as 'Authorization: Bearer …' to every Try It request. Stored only in this browser's localStorage; requests go only to 127.0.0.1.">
-    Token <input id="cfg-token" type="password" placeholder="paste once — applies to Try It" />
+  <span class="cfg" title="Optional — only the six trading operations (place / cancel / close) need a token; everything else works with this box empty. When set it is auto-attached as 'Authorization: Bearer …' to every Try It request. Stored only in this browser's localStorage; requests go only to 127.0.0.1.">
+    Token <input id="cfg-token" type="password" placeholder="only needed to trade" />
     <span class="ok" id="cfg-ok"></span>
   </span>
   <a class="right" href="https://github.com/Colibriecosystem/colibri-sdk">SDKs on GitHub</a>

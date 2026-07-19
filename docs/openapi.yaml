@@ -10,8 +10,9 @@ info:
 
     ## Connecting
 
-    1. In Colibri: **Settings → Program → Local API** → turn it on. Copy the **port** + **access
-       token**. Tick **"Allow web browser access"** if the client runs in a browser — this page's
+    1. In Colibri: **Settings → Program → Local API** → turn it on and copy the **port**. The
+       **access token** is only needed if the client places or cancels orders — see
+       *Authentication*. Tick **"Allow web browser access"** if the client runs in a browser — this page's
        *try it* console against `127.0.0.1` needs that toggle too, since browser requests carry an
        `Origin` header the API otherwise rejects.
     2. **Discovery file** (native clients): while the API is on the terminal writes
@@ -25,24 +26,36 @@ info:
 
     ## Authentication
 
-    Every request except `GET /ping` carries the bearer token:
+    **The bearer token gates one thing: moving money.** Six operations require it — `placeOrder`,
+    `cancelOrder`, `cancelOrders`, `closePositions`, and the two sweeps `cancelAllOrdersEverywhere`
+    / `closeAllPositionsEverywhere`. Each carries its own `security` block; everything else in this
+    document is **open** and needs no credential at all.
 
     ```
     Authorization: Bearer <token>
     ```
 
-    Three gates run on each request/upgrade, in order: **Origin-reject** (browser-originated
-    requests are blocked unless "Allow web browser access" is on) → **Host-check** (the `Host`
-    header must be loopback — anti-DNS-rebinding) → **constant-time token compare**. A browser
-    WebSocket cannot set the header, so the `/stream` upgrade also accepts `?access_token=<token>`.
+    Open means open: market data, the venue catalog, orderbook settings, panel + combo control,
+    notifications, market signals, price alerts, the whole `/stream` WebSocket, and the **account
+    reads** (`listPositions`, `listOrders`, `listBalances`). A read-only widget — screener,
+    dashboard, PnL ticker — needs no token.
+
+    Two gates still run on **every** request and on the WebSocket upgrade, in order:
+    **Origin-reject** (browser-originated requests are blocked unless "Allow web browser access" is
+    on) → **Host-check** (the `Host` header must be loopback — anti-DNS-rebinding). With the browser
+    toggle off, the open surface is reachable by native local processes only.
+
+    Know the trade-off: any process running as your Windows user can read your positions, PnL and
+    balances and move the terminal's windows; with browser access on, so can any site you have open.
+    The money stays behind the token and the grant.
 
     ### Grants (trading)
 
-    Reads work with just the token. **Trading** — and binding a trading account to a panel —
-    additionally needs a **per-connection grant** (Settings → Program → Local API): a granted
-    connection can trade via the API, an ungranted one answers `403 trading_not_enabled` even with
-    a valid token. A connection is bound to exactly one venue, so the exchange is always derived
-    FROM the connection — never a request parameter.
+    The token is necessary but not sufficient. **Trading** — and binding a trading account to a
+    panel — additionally needs a **per-connection grant** (Settings → Program → Local API): a
+    granted connection can trade via the API, an ungranted one answers `403 trading_not_enabled`
+    even with a valid token. A connection is bound to exactly one venue, so the exchange is always
+    derived FROM the connection — never a request parameter.
 
     ## Conventions
 
@@ -66,8 +79,8 @@ info:
     document ([`asyncapi.yaml`](./asyncapi.yaml), rendered at [`./ws.html`](./ws.html)).
     Summary:
 
-    Upgrade `GET /stream` (token via the `Authorization` header, or `?access_token=` for browsers).
-    Then exchange JSON text frames:
+    Upgrade `GET /stream` — **no token**: nothing on this socket moves money, so every channel it
+    carries is open (the Origin + Host gates still apply). Then exchange JSON text frames:
 
     ```jsonc
     // → subscribe (id is optional and echoed back)
@@ -109,22 +122,27 @@ servers:
   - url: http://127.0.0.1:18845
     description: Loopback, default port — see "Connecting" for port discovery + the browser toggle.
 
-security:
-  - bearerToken: []
+# Open by default: the bearer token gates ONLY the six money-moving operations, each of
+# which carries its own `security:` block (placeOrder, cancelOrder, cancelOrders,
+# closePositions, cancelAllOrdersEverywhere, closeAllPositionsEverywhere).
+security: []
 
 tags:
   - name: Discovery
-    description: Liveness + version — the one token-free route.
+    description: Liveness + version.
   - name: Market data
     description: Venue catalog, symbol universes, order-book / cluster / funding snapshots.
   - name: Settings
     description: The exchange-tier orderbook-settings slice (effective values + partial update).
   - name: Connections
-    description: Configured exchange accounts and their positions / orders / balances (reads).
+    description: >-
+      Configured exchange accounts and their positions / orders / balances (reads). Open — these
+      expose sizes / PnL / balances but move nothing.
   - name: Trading
     description: >-
-      Place / cancel / close — grant-gated per connection. Every accepted mutation answers 202
-      (enqueued); confirmation arrives on the WebSocket `orders` channel.
+      Place / cancel / close — the ONLY token-gated operations, and grant-gated per connection on
+      top. Every accepted mutation answers 202 (enqueued); confirmation arrives on the WebSocket
+      `orders` channel.
   - name: Panels
     description: >-
       Slot control — enumerate and drive the terminal's panels by a durable slot id. A SLOT is the
@@ -144,9 +162,8 @@ paths:
       tags: [Discovery]
       summary: Liveness + version
       description: >-
-        The ONE token-exempt route (the Origin and Host gates still apply). Returns the app name,
+        Liveness (the Origin and Host gates still apply, as on every route). Returns the app name,
         version, protocol version, and the live bound port — discovery only, nothing sensitive.
-      security: []
       responses:
         "200":
           description: The terminal is up and the Local API is enabled.
@@ -174,8 +191,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ExchangesResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /exchanges/{exchange}/symbols:
     get:
@@ -196,8 +211,6 @@ paths:
                 $ref: "#/components/schemas/SymbolsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /markets/{exchange}/{symbol}/book:
     get:
@@ -230,8 +243,6 @@ paths:
                 $ref: "#/components/schemas/Book"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "503":
           $ref: "#/components/responses/NotReady"
 
@@ -265,8 +276,6 @@ paths:
                 $ref: "#/components/schemas/Clusters"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /markets/{exchange}/{symbol}/funding:
     get:
@@ -288,8 +297,6 @@ paths:
                 $ref: "#/components/schemas/Funding"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           description: No funding data for this market (spot venue, or not fetched yet). Code `unavailable`.
           content:
@@ -317,8 +324,6 @@ paths:
                 $ref: "#/components/schemas/OrderbookSettingsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
     patch:
       operationId: patchOrderbookSettings
       tags: [Settings]
@@ -344,8 +349,6 @@ paths:
                 $ref: "#/components/schemas/OrderbookSettingsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /connections:
     get:
@@ -362,8 +365,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConnectionsResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /connections/{id}:
     get:
@@ -379,8 +380,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Connection"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/UnknownConnection"
 
@@ -399,13 +398,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OrdersResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/UnknownConnection"
     post:
       operationId: placeOrder
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Place an order
       description: >-
         Place a Limit or Market order on this connection. **Grant-gated.** The venue derives from
@@ -444,6 +443,8 @@ paths:
     delete:
       operationId: cancelOrders
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Cancel every order on the connection
       description: >-
         With `?symbol=` — every working order for that symbol; without — every order across ALL
@@ -480,6 +481,8 @@ paths:
     delete:
       operationId: cancelOrder
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Cancel one order
       description: >-
         Cancel one order by its client order id (the id `POST …/orders` returned, also visible on
@@ -533,13 +536,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PositionsResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/UnknownConnection"
     delete:
       operationId: closePositions
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Close every position on the connection
       description: >-
         Close every open position at market + cancel leftover orders on this one connection (the
@@ -579,8 +582,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BalanceResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/UnknownConnection"
 
@@ -588,6 +589,8 @@ paths:
     delete:
       operationId: cancelAllOrdersEverywhere
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Cancel every order on every granted account
       description: >-
         One HTTP call, no client loop (the terminal's global cancel-all hotkey scope). Cancels
@@ -611,6 +614,8 @@ paths:
     delete:
       operationId: closeAllPositionsEverywhere
       tags: [Trading]
+      security:
+        - bearerToken: []
       summary: Close every position on every granted account
       description: >-
         Close every position at market + cancel leftover orders on every connection granted API
@@ -661,8 +666,6 @@ paths:
                 $ref: "#/components/schemas/PanelsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           description: No tab with that id (code `unknown_tab`).
           content:
@@ -695,8 +698,6 @@ paths:
                 $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/TradingNotEnabled"
         "404":
@@ -734,8 +735,6 @@ paths:
                 $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/TradingNotEnabled"
         "404":
@@ -760,8 +759,6 @@ paths:
                 $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           description: No slot with that id (code `unknown_panel`).
           content:
@@ -792,8 +789,6 @@ paths:
                 $ref: "#/components/schemas/AppActionResult"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /notifications:
     post:
@@ -819,8 +814,6 @@ paths:
                 $ref: "#/components/schemas/AppActionResult"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "503":
           description: Notifications are not wired (code `unavailable`).
           content:
@@ -851,8 +844,6 @@ paths:
                 $ref: "#/components/schemas/AppActionResult"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "503":
           description: Signals are not wired (code `unavailable`).
           content:
@@ -888,8 +879,6 @@ paths:
                 $ref: "#/components/schemas/SignalLevelsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
     post:
       operationId: createSignalLevel
       tags: [Signal levels]
@@ -916,8 +905,6 @@ paths:
                 $ref: "#/components/schemas/SignalLevel"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
     delete:
       operationId: deleteSignalLevelsBySymbol
       tags: [Signal levels]
@@ -945,8 +932,6 @@ paths:
                 $ref: "#/components/schemas/SignalLevelRemoved"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /signal-levels/triggered:
     delete:
@@ -963,8 +948,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SignalLevelRemoved"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /signal-levels/{id}:
     delete:
@@ -985,8 +968,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SignalLevelRemoved"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           description: No such signal level (code `not_found`).
           content:
@@ -1001,8 +982,9 @@ components:
       scheme: bearer
       description: >-
         The access token from Settings → Program → Local API (also in the discovery file
-        %APPDATA%\Colibri\localapi.json). Compared in constant time. The `/stream` WebSocket
-        upgrade also accepts it as `?access_token=` (browsers cannot set the header).
+        %APPDATA%\Colibri\localapi.json). Compared in constant time. Required ONLY by the six
+        money-moving operations that declare it — every other operation, and the `/stream`
+        WebSocket, is open. Trading needs a per-connection grant on top.
 
   parameters:
     exchangePath:

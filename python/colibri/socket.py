@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import threading
-import urllib.parse
 from typing import Any, Callable
 
 
@@ -24,9 +23,13 @@ class ColibriSocket:
         ws.run_forever()   # or keep your own loop alive
     """
 
-    def __init__(self, base: str, token: str) -> None:
+    def __init__(self, base: str, token: str | None = None) -> None:
+        # No credential: nothing on this socket moves money, so every channel it carries is
+        # open (Origin + Host are still checked server-side). `token` is accepted and ignored
+        # so existing call sites keep working; the old ?access_token= query is gone because
+        # the server ignores it and a token in a URL leaks into logs.
         ws_base = "ws" + base[len("http"):]
-        self.url = ws_base + "/stream?access_token=" + urllib.parse.quote(token)
+        self.url = ws_base + "/stream"
         self._handlers: dict[str, list[Callable[[Any, dict], None]]] = {}
         self._outbox: list[str] = []
         self._open = threading.Event()
