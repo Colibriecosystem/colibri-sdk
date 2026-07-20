@@ -9,22 +9,12 @@ asyncapi: 2.6.0
 info:
   title: Colibri Local API — WebSocket stream
   version: "1.0.0"
-  description: >-
-    The live-streaming half of the Colibri **Local API** — a single WebSocket at
-    `GET /stream` multiplexing every channel over one socket.
+  description: |-
+    The live-streaming half of the Colibri **Local API** — a single WebSocket at `GET /stream` multiplexing every channel over one socket.
 
+    **Connect**: upgrade `GET /stream` — **no token required**. Nothing on this socket moves money (trading is REST-only), so every channel it carries is open, account channels included. The Origin and Host gates still apply: a browser can only connect when "Allow web browser access" is on. The port comes from the discovery file (`%APPDATA%\Colibri\localapi.json`) or Settings → Program → Local API.
 
-    **Connect**: upgrade `GET /stream` — **no token required**. Nothing on this socket
-    moves money (trading is REST-only), so every channel it carries is open, account
-    channels included. The Origin and Host gates still apply: a browser can only connect
-    when "Allow web browser access" is on. The port comes from the discovery file
-    (`%APPDATA%\Colibri\localapi.json`) or Settings → Program → Local API.
-
-
-    **Envelope**: every frame is a JSON text message `{"type": "...", "data": {...},
-    "id": "..."}` — `id` is optional on requests and echoed back on the matching ack
-    or error.
-
+    **Envelope**: every frame is a JSON text message `{"type": "...", "data": {...}, "id": "..."}` — `id` is optional on requests and echoed back on the matching ack or error.
 
     **Channels** (all multiplexed on the one socket):
 
@@ -37,11 +27,7 @@ info:
     | `notifications` | — (app-wide) | — | terminal notifications (secret-free); a bounded backlog replays AFTER the ack, then live |
     | `signalLevels` | — (app-wide) | — | `placed` / `removed` / `triggered` events; the current set replays as `placed` AFTER the ack |
 
-
-    **Backpressure**: market frames (`book` / `trades` / `funding` and the account
-    snapshots) are droppable **latest-wins**; acks, errors, notifications, and
-    signal-level events ride a reliable lane — a client that stops reading is
-    disconnected rather than silently starved.
+    **Backpressure**: market frames (`book` / `trades` / `funding` and the account snapshots) are droppable **latest-wins**; acks, errors, notifications, and signal-level events ride a reliable lane — a client that stops reading is disconnected rather than silently starved.
   license:
     name: MIT
 
