@@ -28,6 +28,16 @@
   .topbar a.active { color: #fff; border-bottom: 2px solid #4f7cff; }
   .topbar .right { margin-left: auto; }
   #asyncapi { max-width: 1400px; margin: 0 auto; }
+  /* The AsyncAPI component's CSS doesn't pin a content font, so the browser falls
+     back to serif (Times) — jarring next to the REST page's sans-serif. Force the
+     same system sans stack the topbar uses; keep code/pre monospace (an id+type
+     selector outranks the id+universal one, so code is unaffected). */
+  #asyncapi, #asyncapi * {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  #asyncapi code, #asyncapi pre, #asyncapi kbd, #asyncapi tt, #asyncapi samp {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
   .loading { padding: 40px; font: 15px -apple-system, "Segoe UI", Roboto, sans-serif; color: #555; }
   .theme-btn {
     background: none; border: 1px solid #2c3650; border-radius: 4px; color: #9fb0d0;
