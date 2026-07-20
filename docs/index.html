@@ -50,7 +50,6 @@
   }
   .cfg input:focus { border-color: #4f7cff; }
   .cfg input#cfg-port { width: 58px; }
-  .cfg input#cfg-token { width: 170px; }
   .cfg .ok { color: #46c07a; font-size: 12px; min-width: 14px; }
   #docs { height: calc(100% - 45px); }
   .theme-btn {
@@ -84,9 +83,6 @@
   <a href="./ws.html">WebSocket</a>
   <span class="cfg" title="Your terminal's Local API port (Settings → Program → Local API). Rewrites every URL + Try It target.">
     Port <input id="cfg-port" type="text" inputmode="numeric" placeholder="18845" />
-  </span>
-  <span class="cfg" title="Optional — only the six trading operations (place / cancel / close) need a token; everything else works with this box empty. When set it is auto-attached as 'Authorization: Bearer …' to every Try It request. Stored only in this browser's localStorage; requests go only to 127.0.0.1.">
-    Token <input id="cfg-token" type="password" placeholder="only needed to trade" />
     <span class="ok" id="cfg-ok"></span>
   </span>
   <a class="right" href="https://github.com/Colibriecosystem/colibri-sdk">SDKs on GitHub</a>
@@ -105,13 +101,10 @@
   "use strict";
   const DEFAULT_PORT = "18845";
   const portInput = document.getElementById("cfg-port");
-  const tokenInput = document.getElementById("cfg-token");
   const okBadge = document.getElementById("cfg-ok");
   portInput.value = localStorage.getItem("colibri.port") || "";
-  tokenInput.value = localStorage.getItem("colibri.token") || "";
 
   const port = () => (portInput.value.trim().match(/^\d{2,5}$/) ? portInput.value.trim() : DEFAULT_PORT);
-  const token = () => tokenInput.value.trim();
 
   // Load the spec ourselves and rewrite the server port BEFORE Elements renders,
   // so the docs, request samples, and Try It all target the configured port.
@@ -145,58 +138,12 @@
     clearTimeout(debounce);
     debounce = setTimeout(() => { applySpec(); flashOk(); }, 400);
   });
-  tokenInput.addEventListener("input", () => {
-    localStorage.setItem("colibri.token", tokenInput.value.trim());
-    flashOk();
-    maskTokenBoxes();
-  });
 
-  // With a global token saved, each operation's per-request Token box shows a
-  // masked "••••••••" placeholder (typing there still overrides the global one).
-  const MASKED = "••••••••";
-  function maskTokenBoxes() {
-    const want = token() ? MASKED : "123";
-    const hint = token()
-      ? "Global token applied (topbar) — type here to override for this request"
-      : "";
-    document.querySelectorAll('#docs input[aria-label="Token"]').forEach((inp) => {
-      if (inp.placeholder !== want) inp.placeholder = want;
-      if (inp.title !== hint) inp.title = hint;
-    });
-  }
-  let maskTimer = 0;
-  new MutationObserver(() => {
-    clearTimeout(maskTimer);
-    maskTimer = setTimeout(maskTokenBoxes, 120);
-  }).observe(document.getElementById("docs"), { childList: true, subtree: true });
-
-  // Attach the saved token to every Try It request that goes to the loopback API
-  // and doesn't already carry an Authorization header (an explicitly typed
-  // per-request token wins). Loopback-only by construction.
-  const origFetch = window.fetch;
-  window.fetch = function (input, init) {
-    try {
-      const url = typeof input === "string" ? input : input.url;
-      const t = token();
-      if (t && /^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
-        if (input instanceof Request) {
-          const h = new Headers(input.headers);
-          if (!h.get("authorization")) {
-            h.set("Authorization", "Bearer " + t);
-            input = new Request(input, { headers: h });
-          }
-        } else {
-          init = init || {};
-          const h = new Headers(init.headers || {});
-          if (!h.get("authorization")) {
-            h.set("Authorization", "Bearer " + t);
-            init.headers = h;
-          }
-        }
-      }
-    } catch { /* never break a request over the convenience header */ }
-    return origFetch.call(this, input, init);
-  };
+  // The bearer token is entered in Stoplight's native per-operation Auth panel,
+  // which appears ONLY on the six trading endpoints that declare it (place /
+  // cancel / close). There is no global token field: reads, panel control and the
+  // WebSocket need none, and Stoplight persists the token across the trading
+  // operations within a session — so one place to enter it, exactly where it's used.
 })();
 </script>
 <script src="./copy-enhancer.js"></script>
