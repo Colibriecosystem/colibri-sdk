@@ -92,7 +92,7 @@ class ColibriClient:
         return self._req("GET", f"/markets/{exchange}/{symbol}/book" + self._qs(depth=depth))
 
     def clusters(self, exchange: str, symbol: str, limit: int | None = None) -> dict:
-        """GET /markets/{exchange}/{symbol}/clusters — raw 1-minute buckets (merge timeframes yourself); limit 1-4320."""
+        """GET /markets/{exchange}/{symbol}/clusters — raw 15-second base buckets (merge timeframes yourself); limit 1-17280 (72 h), default 240 = the last hour."""
         return self._req("GET", f"/markets/{exchange}/{symbol}/clusters" + self._qs(limit=limit))
 
     def funding(self, exchange: str, symbol: str) -> dict:

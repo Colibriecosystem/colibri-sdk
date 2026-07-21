@@ -15,9 +15,9 @@ console.log(`\n${SYMBOL}  last=${book.lastPrice}  bid=${book.bestBid}  ask=${boo
 for (const a of book.asks.slice(0, 3).reverse()) console.log(`  ask ${a.price}  ${a.baseQty}  ($${a.usdVolume})`);
 for (const b of book.bids.slice(0, 3)) console.log(`  bid ${b.price}  ${b.baseQty}  ($${b.usdVolume})`);
 
-// GET /markets/{exchange}/{symbol}/clusters?limit=  — raw 1-minute buckets (merge timeframes yourself)
+// GET /markets/{exchange}/{symbol}/clusters?limit=  — raw 15-second base buckets (merge timeframes yourself)
 const clusters = await client.clusters(EXCHANGE, SYMBOL, 30);
-console.log(`\nclusters: ${clusters.buckets.length} one-minute buckets`);
+console.log(`\nclusters: ${clusters.buckets.length} 15-second buckets`);
 const last = clusters.buckets.at(-1);
 if (last) console.log(`  latest bucket @${new Date(last.startUnixSec * 1000).toISOString()}: buy $${last.totalBuyUsd} / sell $${last.totalSellUsd}`);
 

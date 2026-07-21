@@ -123,7 +123,7 @@ export class ColibriClient {
     const qs = opts.depth != null ? `?depth=${opts.depth}` : "";
     return this.req("GET", `/markets/${enc(exchange)}/${enc(symbol)}/book${qs}`);
   }
-  /** GET /markets/{exchange}/{symbol}/clusters — raw 1-minute buckets (merge timeframes yourself); `limit` 1–4320. */
+  /** GET /markets/{exchange}/{symbol}/clusters — raw 15-second base buckets (merge timeframes yourself); `limit` 1–17280 (72 h), default 240 = the last hour. */
   clusters(exchange: string, symbol: string, limit?: number): Promise<Clusters> {
     const qs = limit != null ? `?limit=${limit}` : "";
     return this.req("GET", `/markets/${enc(exchange)}/${enc(symbol)}/clusters${qs}`);

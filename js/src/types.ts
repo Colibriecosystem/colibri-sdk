@@ -35,7 +35,7 @@ export interface ClusterLevel {
   sellBase: string;
 }
 
-/** One 1-minute footprint bucket (the client merges buckets into coarser timeframes itself). */
+/** One 15-second base footprint bucket (the client merges buckets into coarser timeframes itself). */
 export interface Cluster {
   /** Bucket start time, unix SECONDS. */
   startUnixSec: number;
@@ -50,7 +50,7 @@ export interface Clusters {
   exchange: string;
   symbol: string;
   tickSize: string;
-  /** Raw 1-minute buckets, oldest → newest. */
+  /** Raw 15-second base buckets, oldest → newest. */
   buckets: Cluster[];
 }
 

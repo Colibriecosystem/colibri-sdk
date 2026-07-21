@@ -252,21 +252,21 @@ paths:
       tags: [Market data]
       summary: Volume-cluster (footprint) buckets
       description: >-
-        Raw **1-minute** cluster buckets, oldest → newest — per-price buy/sell sums in both units
-        plus per-bucket totals. The client merges buckets into coarser timeframes itself. Answers
-        an empty bucket list before any trade has printed (no liveness gate).
+        Raw **15-second** base cluster buckets, oldest → newest — per-price buy/sell sums in both
+        units plus per-bucket totals. The client merges buckets into coarser timeframes itself.
+        Answers an empty bucket list before any trade has printed (no liveness gate).
       parameters:
         - $ref: "#/components/parameters/exchangePath"
         - $ref: "#/components/parameters/symbolPath"
         - name: limit
           in: query
           required: false
-          description: "Max buckets, newest kept (clamped to 1–4320 = 72 h of minutes; default 60)."
+          description: "Max buckets, newest kept (clamped to 1–17280 = the full 72 h buffer; default 240 = the last hour)."
           schema:
             type: integer
             minimum: 1
-            maximum: 4320
-            default: 60
+            maximum: 17280
+            default: 240
       responses:
         "200":
           description: The cluster buckets.
@@ -1238,7 +1238,7 @@ components:
 
     ClusterLevel:
       type: object
-      description: Per-price buy/sell sums inside one minute bucket, in both units.
+      description: Per-price buy/sell sums inside one 15-second base bucket, in both units.
       required: [price, buyUsd, sellUsd, buyBase, sellBase]
       properties:
         price:
@@ -1259,7 +1259,7 @@ components:
 
     Cluster:
       type: object
-      description: One 1-minute bucket of the cluster/footprint column.
+      description: One 15-second base bucket of the cluster/footprint column.
       required: [startUnixSec, totalBuyUsd, totalSellUsd, totalBuyBase, totalSellBase, levels]
       properties:
         startUnixSec:
@@ -1285,7 +1285,7 @@ components:
 
     Clusters:
       type: object
-      description: Raw 1-minute buckets, oldest → newest — the client merges timeframes itself.
+      description: Raw 15-second base buckets, oldest → newest — the client merges timeframes itself.
       required: [exchange, symbol, tickSize, buckets]
       properties:
         exchange:

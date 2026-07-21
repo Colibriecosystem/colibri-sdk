@@ -32,7 +32,7 @@ var book = await client.BookAsync(exchange, symbol, depth: 10);
 Console.WriteLine($"{symbol}  last={book.LastPrice}  bid={book.BestBid}  ask={book.BestAsk}");
 
 var clusters = await client.ClustersAsync(exchange, symbol, limit: 30);
-Console.WriteLine($"clusters: {clusters.Buckets.Count} one-minute buckets");
+Console.WriteLine($"clusters: {clusters.Buckets.Count} 15-second buckets");
 
 try
 {

@@ -17,10 +17,10 @@ public sealed record Book(
     IReadOnlyList<BookLevel> Bids,
     IReadOnlyList<BookLevel> Asks);
 
-/// <summary>Per-price buy/sell sums inside one 1-minute bucket, in both units.</summary>
+/// <summary>Per-price buy/sell sums inside one 15-second base bucket, in both units.</summary>
 public sealed record ClusterLevel(string Price, string BuyUsd, string SellUsd, string BuyBase, string SellBase);
 
-/// <summary>One 1-minute footprint bucket (<c>StartUnixSec</c> is unix SECONDS). Merge timeframes client-side.</summary>
+/// <summary>One 15-second base footprint bucket (<c>StartUnixSec</c> is unix SECONDS). Merge timeframes client-side.</summary>
 public sealed record Cluster(
     long StartUnixSec,
     string TotalBuyUsd,
@@ -29,7 +29,7 @@ public sealed record Cluster(
     string TotalSellBase,
     IReadOnlyList<ClusterLevel> Levels);
 
-/// <summary><c>GET /markets/{exchange}/{symbol}/clusters</c> — raw 1-minute buckets, oldest → newest.</summary>
+/// <summary><c>GET /markets/{exchange}/{symbol}/clusters</c> — raw 15-second base buckets, oldest → newest.</summary>
 public sealed record Clusters(string Exchange, string Symbol, string TickSize, IReadOnlyList<Cluster> Buckets);
 
 public sealed record Funding(string Exchange, string Symbol, string Rate, long NextFundingTimeMs);

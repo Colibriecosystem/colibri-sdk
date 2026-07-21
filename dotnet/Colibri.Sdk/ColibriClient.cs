@@ -123,7 +123,7 @@ public sealed class ColibriClient : IDisposable
     public Task<Book> BookAsync(string exchange, string symbol, int? depth = null, CancellationToken ct = default) =>
         GetAsync<Book>($"/markets/{E(exchange)}/{E(symbol)}/book{(depth is null ? "" : $"?depth={depth}")}", ct);
 
-    /// <summary>GET /markets/{exchange}/{symbol}/clusters — raw 1-minute buckets (merge timeframes yourself); <paramref name="limit" /> 1–4320.</summary>
+    /// <summary>GET /markets/{exchange}/{symbol}/clusters — raw 15-second base buckets (merge timeframes yourself); <paramref name="limit" /> 1–17280 (72 h), default 240 = the last hour.</summary>
     public Task<Clusters> ClustersAsync(string exchange, string symbol, int? limit = null, CancellationToken ct = default) =>
         GetAsync<Clusters>($"/markets/{E(exchange)}/{E(symbol)}/clusters{(limit is null ? "" : $"?limit={limit}")}", ct);
 

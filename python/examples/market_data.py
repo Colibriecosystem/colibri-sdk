@@ -19,9 +19,9 @@ for a in reversed(book["asks"][:3]):
 for b in book["bids"][:3]:
     print(f"  bid {b['price']}  {b['baseQty']}  (${b['usdVolume']})")
 
-# GET /markets/{exchange}/{symbol}/clusters?limit=  — raw 1-minute buckets (merge timeframes yourself)
+# GET /markets/{exchange}/{symbol}/clusters?limit=  — raw 15-second base buckets (merge timeframes yourself)
 clusters = client.clusters(EXCHANGE, SYMBOL, limit=30)
-print(f"\nclusters: {len(clusters['buckets'])} one-minute buckets")
+print(f"\nclusters: {len(clusters['buckets'])} 15-second buckets")
 if clusters["buckets"]:
     last = clusters["buckets"][-1]
     print(f"  latest bucket @{last['startUnixSec']}: buy ${last['totalBuyUsd']} / sell ${last['totalSellUsd']}")

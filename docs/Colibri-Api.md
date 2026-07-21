@@ -86,7 +86,7 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | GET | `/exchanges` | the venue catalog — `id` is the string every `{exchange}` accepts; `trading:false` = view-only venue |
 | GET | `/exchanges/{exchange}/symbols` | the venue's symbol universe + metadata |
 | GET | `/markets/{exchange}/{symbol}/book` | `?depth=` (1–500). Dual-unit book snapshot |
-| GET | `/markets/{exchange}/{symbol}/clusters` | `?limit=` (1–4320). Raw 1-minute footprint buckets, oldest → newest — merge timeframes client-side |
+| GET | `/markets/{exchange}/{symbol}/clusters` | `?limit=` (1–17280). Raw 15-second base footprint buckets, oldest → newest — merge timeframes client-side |
 | GET | `/markets/{exchange}/{symbol}/funding` | perp funding (spot → 404 `unavailable`) |
 | GET / PATCH | `/exchanges/{exchange}/orderbook-settings` | effective render settings (exchange tier) / partial patch |
 | GET | `/connections` | `{connections: [{id, exchange, marketType, label, demo, viewOnly, apiTradingEnabled}]}` |
@@ -141,7 +141,7 @@ connection by itself (no grant needed — the app picks, not the API).
 | `sizeQuote` / `sizeBase` | place order | decimal string | Exactly one positive: spend N quote vs N coins |
 | `reduceOnly` | place order | bool, default `false` | Closing order — never increases the position (futures) |
 | `depth` | book (REST + WS) | int 1–500, default 50 | Levels per side |
-| `limit` | clusters | int 1–4320, default 60 | 1-minute buckets, newest kept |
+| `limit` | clusters | int 1–17280, default 240 (= the last hour) | 15-second base buckets, newest kept |
 | `direction` | signal levels | `above` \| `below` \| `cross` (requests, case-insensitive) | Default `cross`; responses echo the enum name (`Above`/`Below`/`Cross`) |
 | `oneShot` | signal levels | bool, default `false` | true = remove on fire; false = keep, marked `isTriggered` |
 | `severity` | `POST /notifications` | `info` \| `success` \| `warning` \| `error` | Default `info` |
