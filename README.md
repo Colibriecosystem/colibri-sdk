@@ -15,6 +15,12 @@ grant. Exchange keys never leave the app.
   rendering of [`docs/asyncapi.yaml`](docs/asyncapi.yaml), the `/stream` protocol
 - **Basics + route summary:** [`docs/Colibri-Api.md`](docs/Colibri-Api.md)
 
+This site also hosts the terminal's **builder-code approval page**
+(<https://colibriecosystem.github.io/colibri-sdk/approve/>, [`docs/approve/`](docs/approve)). It is
+not part of the SDK surface: Colibri shows a QR, the user scans it with their phone wallet, and the
+page signs the venue's EIP-712 builder-fee approval inside the wallet app and submits it to the
+venue. No private key is ever entered, and the page is opened only via that QR.
+
 ## Enable the API
 
 In Colibri: **Settings → Program → Local API** → turn it on and copy the **port**. Copy the **access

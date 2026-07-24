@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approve builder code — Colibri</title>
+<link rel="icon" type="image/png" href="../favicon.png">
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif; max-width: 30rem;
+         margin: 0 auto; padding: 0 1.1rem 3rem; line-height: 1.5; }
+  /* Brand header matching the SDK docs topbar (docs/index.html). */
+  .brandbar { display: flex; align-items: center; gap: 10px; height: 44px; margin: 0 -1.1rem 1.2rem;
+              padding: 0 16px; background: #0f1420; color: #e6e9f0;
+              font: 700 14px/1 -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  .brandbar img { width: 22px; height: 22px; }
+  h1 { font-size: 1.2rem; margin: .2rem 0 1rem; }
+  .card { border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 12px;
+          padding: .9rem 1.1rem; margin: 1rem 0; }
+  .row { display: flex; justify-content: space-between; gap: 1rem; margin: .3rem 0; }
+  .row span:first-child { opacity: .7; }
+  .row b { text-align: right; }
+  .muted { opacity: .7; font-size: .9rem; }
+  .addr { font-family: ui-monospace, Consolas, monospace; font-size: .78rem; word-break: break-all; }
+  button { width: 100%; font-size: 1.05rem; padding: .95rem 1rem; border-radius: 10px; border: 0;
+           background: #7C5CE6; color: #fff; font-weight: 600; cursor: pointer; margin-top: .5rem; }
+  button:disabled { opacity: .55; cursor: default; }
+  #status { margin-top: 1rem; font-size: .95rem; }
+  .ok { color: #1a8f3c; font-weight: 600; }
+  .err { color: #c62828; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<nav class="brandbar"><img src="../favicon.png" alt=""><span>Colibri</span></nav>
+
+<h1>Approve Colibri's builder code</h1>
+
+<div class="card">
+  <div class="row"><span>Venue</span><b id="venue">—</b></div>
+  <div class="row"><span>Fee per order</span><b id="fee">—</b></div>
+  <div class="row"><span>Builder</span><b class="addr" id="builder">—</b></div>
+  <div class="row"><span>Your account</span><b class="addr" id="account">—</b></div>
+</div>
+
+<p class="muted">Your wallet signs a one-time fee approval — no transaction and no gas. Your private
+key never leaves the wallet; Colibri only reads the approval back from the venue.</p>
+
+<button id="go">Connect wallet &amp; approve</button>
+<div id="status"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Program constants — BAKED IN, never taken from the URL ─────────────
+  // Only account-scoped values (venue, account, chain) ride the link, so a tampered QR can never
+  // redirect the approval to another builder or raise the fee. Keep in lockstep with
+  // src/ScalpTerminal.Core/Branding/PartnerIdentifiers.cs.
+  var VENUES = {
+    aster: {
+      name: 'Aster Perpetual',
+      builder: '0xD412dC2CEbF58B5c4Efbf81CBe127F4b7fE7318F',
+      builderName: 'Colibri',
+      maxFeeRate: '0.00002',              // decimal fraction = 0.2 bp
+      feeText: '0.2 bp',
+      endpoint: { main: 'https://fapi.asterdex.com', test: 'https://fapi.asterdex-testnet.com' }
+    },
+    hyperliquid: {
+      name: 'Hyperliquid Perpetual',
+      builder: '0x9d9e9483f5b9a582c68f931913dc4fe9453e2bae', // lowercase: HL signs the address form it stores
+      maxFeeRate: '0.002%',               // 2 tenths-of-bp = 0.2 bp
+      feeText: '0.2 bp',
+      endpoint: { main: 'https://api.hyperliquid.xyz', test: 'https://api.hyperliquid-testnet.xyz' }
+    }
+  };
+
+  var params = new URLSearchParams(location.search);
+  var venueKey = (params.get('v') || '').toLowerCase();
+  var account = (params.get('a') || '').trim();
+  var chainId = parseInt(params.get('c') || '0', 10);
+  var testnet = params.get('t') === '1';
+  var venue = VENUES[venueKey];
+
+  var status = document.getElementById('status');
+  var btn = document.getElementById('go');
+  function show(cls, text) { status.className = cls; status.textContent = text; }
+  function shorten(a) { return a.length > 14 ? a.slice(0, 8) + '…' + a.slice(-6) : a; }
+
+  if (!venue || !/^0x[0-9a-fA-F]{40}$/.test(account) || !chainId) {
+    show('err', 'This link is incomplete or malformed. Re-open the approval window in Colibri and scan the QR again.');
+    btn.disabled = true;
+    return;
+  }
+
+  document.getElementById('venue').textContent = venue.name + (testnet ? ' (testnet)' : '');
+  document.getElementById('fee').textContent = venue.feeText;
+  document.getElementById('builder').textContent = shorten(venue.builder);
+  document.getElementById('account').textContent = shorten(account);
+
+  var host = testnet ? venue.endpoint.test : venue.endpoint.main;
+
+  // Nonce: microsecond-ish monotonic value, matching each venue's anti-replay expectation
+  // (Aster uses seconds*1e6; Hyperliquid uses milliseconds).
+  function asterNonce() { return Math.floor(Date.now() / 1000) * 1000000; }
+  function hlNonce() { return Date.now(); }
+
+  // ── Typed data — MUST mirror the C# signers byte-for-byte ──────────────
+  // Aster: AsterEip712Signer.ApproveBuilderTypeString
+  function asterTypedData(nonce) {
+    return {
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' }
+        ],
+        ApproveBuilder: [
+          { name: 'Builder', type: 'string' },
+          { name: 'MaxFeeRate', type: 'string' },
+          { name: 'BuilderName', type: 'string' },
+          { name: 'AsterChain', type: 'string' },
+          { name: 'User', type: 'string' },
+          { name: 'Nonce', type: 'uint256' }
+        ]
+      },
+      primaryType: 'ApproveBuilder',
+      domain: {
+        name: 'AsterSignTransaction',
+        version: '1',
+        chainId: chainId,
+        verifyingContract: '0x0000000000000000000000000000000000000000'
+      },
+      message: {
+        Builder: venue.builder,
+        MaxFeeRate: venue.maxFeeRate,
+        BuilderName: venue.builderName,
+        AsterChain: testnet ? 'Testnet' : 'Mainnet',
+        User: account,
+        Nonce: String(nonce)
+      }
+    };
+  }
+
+  // Hyperliquid: HyperliquidUserSigner.ApproveBuilderFeeType
+  function hlTypedData(nonce) {
+    return {
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' }
+        ],
+        'HyperliquidTransaction:ApproveBuilderFee': [
+          { name: 'hyperliquidChain', type: 'string' },
+          { name: 'maxFeeRate', type: 'string' },
+          { name: 'builder', type: 'address' },
+          { name: 'nonce', type: 'uint64' }
+        ]
+      },
+      primaryType: 'HyperliquidTransaction:ApproveBuilderFee',
+      domain: {
+        name: 'HyperliquidSignTransaction',
+        version: '1',
+        chainId: chainId,           // 0xa4b1 (Arbitrum One) for HL user-signed actions
+        verifyingContract: '0x0000000000000000000000000000000000000000'
+      },
+      message: {
+        hyperliquidChain: testnet ? 'Testnet' : 'Mainnet',
+        maxFeeRate: venue.maxFeeRate,
+        builder: venue.builder,
+        nonce: nonce
+      }
+    };
+  }
+
+  // ── Submits ───────────────────────────────────────────────────────────
+  function splitSig(sig) {
+    var s = sig.slice(2);
+    var v = parseInt(s.slice(128, 130), 16);
+    return { r: '0x' + s.slice(0, 64), s: '0x' + s.slice(64, 128), v: v < 27 ? v + 27 : v };
+  }
+
+  async function submitAster(nonce, signature) {
+    var body = 'builder=' + venue.builder +
+               '&maxFeeRate=' + venue.maxFeeRate +
+               '&builderName=' + venue.builderName +
+               '&asterChain=' + (testnet ? 'Testnet' : 'Mainnet') +
+               '&user=' + account +
+               '&nonce=' + nonce +
+               '&signature=' + signature +
+               '&signatureChainId=' + chainId;
+    var resp = await fetch(host + '/fapi/v3/approveBuilder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    });
+    var text = await resp.text();
+    var data = {};
+    try { data = JSON.parse(text); } catch (e) { /* non-JSON error body */ }
+    if (!resp.ok || (data.code && data.code !== 200)) {
+      throw new Error(data.msg || text || ('HTTP ' + resp.status));
+    }
+  }
+
+  async function submitHyperliquid(nonce, signature) {
+    var action = {
+      type: 'approveBuilderFee',
+      hyperliquidChain: testnet ? 'Testnet' : 'Mainnet',
+      signatureChainId: '0xa4b1',
+      maxFeeRate: venue.maxFeeRate,
+      builder: venue.builder,
+      nonce: nonce
+    };
+    var resp = await fetch(host + '/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, nonce: nonce, signature: splitSig(signature) })
+    });
+    var data = await resp.json();
+    if (!resp.ok || data.status !== 'ok') {
+      throw new Error((data && (data.response || data.status)) ? JSON.stringify(data.response || data.status) : ('HTTP ' + resp.status));
+    }
+  }
+
+  // ── Flow ──────────────────────────────────────────────────────────────
+  btn.addEventListener('click', async function () {
+    try {
+      if (!window.ethereum) {
+        show('err', 'No wallet found in this browser. Open this page from inside your wallet app (scan the QR with the wallet’s scanner, or paste the link into its built-in browser).');
+        return;
+      }
+
+      btn.disabled = true;
+      show('', 'Connecting wallet…');
+      var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      var from = (accounts && accounts[0] ? accounts[0] : '').toLowerCase();
+      if (from !== account.toLowerCase()) {
+        show('err', 'This wallet is ' + shorten(from) + ', but the connection uses ' + shorten(account) +
+                    '. Switch to that account in your wallet and try again.');
+        btn.disabled = false;
+        return;
+      }
+
+      var nonce = venueKey === 'aster' ? asterNonce() : hlNonce();
+      var typed = venueKey === 'aster' ? asterTypedData(nonce) : hlTypedData(nonce);
+
+      show('', 'Confirm the signature in your wallet…');
+      var signature = await window.ethereum.request({
+        method: 'eth_signTypedData_v4',
+        params: [from, JSON.stringify(typed)]
+      });
+
+      show('', 'Submitting to ' + venue.name + '…');
+      if (venueKey === 'aster') {
+        await submitAster(nonce, signature);
+      } else {
+        await submitHyperliquid(nonce, signature);
+      }
+
+      show('ok', 'Approved. Return to Colibri — it will pick this up within a few seconds.');
+    } catch (e) {
+      var msg = (e && e.message) ? e.message : String(e);
+      show('err', 'Approval failed: ' + msg);
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
