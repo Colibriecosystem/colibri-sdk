@@ -24,6 +24,8 @@
   .addr { font-family: ui-monospace, Consolas, monospace; font-size: .78rem; word-break: break-all; }
   button { width: 100%; font-size: 1.05rem; padding: .95rem 1rem; border-radius: 10px; border: 0;
            background: #7C5CE6; color: #fff; font-weight: 600; cursor: pointer; margin-top: .5rem; }
+  button.secondary { background: transparent; color: inherit;
+                     border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
   button:disabled { opacity: .55; cursor: default; }
   #status { margin-top: 1rem; font-size: .95rem; }
   .ok { color: #1a8f3c; font-weight: 600; }
@@ -42,20 +44,39 @@
   <div class="row"><span>Your account</span><b class="addr" id="account">—</b></div>
 </div>
 
-<p class="muted">Your wallet signs a one-time fee approval — no transaction and no gas. Your private
-key never leaves the wallet; Colibri only reads the approval back from the venue.</p>
+<p class="muted">Connect the wallet that holds your main account and approve a one-time fee — no
+transaction and no gas. Your private key never leaves the wallet; Colibri only reads the approval
+back from the venue.</p>
 
-<button id="go">Connect wallet &amp; approve</button>
+<div id="connect">
+  <button id="go-injected">Connect browser wallet</button>
+  <button id="go-wc" class="secondary">Scan with a mobile wallet (WalletConnect)</button>
+</div>
 <div id="status"></div>
 
 <script>
 (function () {
   'use strict';
 
+  // ── WalletConnect project id ───────────────────────────────────────────
+  // A free, PUBLIC id from https://cloud.reown.com (formerly WalletConnect Cloud). Ships empty:
+  // while empty, the WalletConnect (mobile) option is hidden and only an injected browser wallet
+  // (extension, or the wallet app's own in-app browser) works. Fill it to enable the mobile path.
+  var WC_PROJECT_ID = '';
+
+  // WalletConnect EthereumProvider bundle (loaded on demand, only when the mobile button is used,
+  // so a CDN failure never affects the injected path or the page render). Matches how the SDK docs
+  // load Stoplight Elements from a CDN.
+  var WC_MODULE = 'https://esm.sh/@walletconnect/ethereum-provider@2.21.1?bundle';
+
   // ── Program constants — BAKED IN, never taken from the URL ─────────────
   // Only account-scoped values (venue, account, chain) ride the link, so a tampered QR can never
   // redirect the approval to another builder or raise the fee. Keep in lockstep with
   // src/ScalpTerminal.Core/Branding/PartnerIdentifiers.cs.
+  //
+  // wcChain is the REAL settlement chain the WalletConnect session negotiates (the wallet must be
+  // able to approve it) — distinct from the EIP-712 domain chainId in the typed data below (which
+  // the venue verifies, and which the wallet signs regardless of the connected network).
   var VENUES = {
     aster: {
       name: 'Aster Perpetual',
@@ -63,6 +84,7 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
       builderName: 'Colibri',
       maxFeeRate: '0.00002',              // decimal fraction = 0.2 bp
       feeText: '0.2 bp',
+      wcChain: { main: 56, test: 97 },    // BNB Smart Chain (Aster settles on BSC)
       endpoint: { main: 'https://fapi.asterdex.com', test: 'https://fapi.asterdex-testnet.com' }
     },
     hyperliquid: {
@@ -70,6 +92,7 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
       builder: '0x9d9e9483f5b9a582c68f931913dc4fe9453e2bae', // lowercase: HL signs the address form it stores
       maxFeeRate: '0.002%',               // 2 tenths-of-bp = 0.2 bp
       feeText: '0.2 bp',
+      wcChain: { main: 42161, test: 42161 }, // Arbitrum One (HL user-signed-action signatureChainId)
       endpoint: { main: 'https://api.hyperliquid.xyz', test: 'https://api.hyperliquid-testnet.xyz' }
     }
   };
@@ -82,13 +105,16 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
   var venue = VENUES[venueKey];
 
   var status = document.getElementById('status');
-  var btn = document.getElementById('go');
+  var connectBox = document.getElementById('connect');
+  var goInjected = document.getElementById('go-injected');
+  var goWc = document.getElementById('go-wc');
   function show(cls, text) { status.className = cls; status.textContent = text; }
   function shorten(a) { return a.length > 14 ? a.slice(0, 8) + '…' + a.slice(-6) : a; }
+  function showConnect(on) { connectBox.style.display = on ? '' : 'none'; }
 
   if (!venue || !/^0x[0-9a-fA-F]{40}$/.test(account) || !chainId) {
     show('err', 'This link is incomplete or malformed. Re-open the approval window in Colibri and scan the QR again.');
-    btn.disabled = true;
+    showConnect(false);
     return;
   }
 
@@ -98,9 +124,21 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
   document.getElementById('account').textContent = shorten(account);
 
   var host = testnet ? venue.endpoint.test : venue.endpoint.main;
+  var wcChain = testnet ? venue.wcChain.test : venue.wcChain.main;
 
-  // Nonce: microsecond-ish monotonic value, matching each venue's anti-replay expectation
-  // (Aster uses seconds*1e6; Hyperliquid uses milliseconds).
+  // Wallet options: injected (extension / in-app browser) if present; WalletConnect if configured.
+  var hasInjected = !!window.ethereum;
+  var hasWc = !!WC_PROJECT_ID;
+  goInjected.style.display = hasInjected ? '' : 'none';
+  goWc.style.display = hasWc ? '' : 'none';
+  if (!hasInjected && hasWc) { goWc.className = ''; } // promote WalletConnect to the primary style
+  if (!hasInjected && !hasWc) {
+    showConnect(false);
+    show('err', 'No wallet found in this browser. Open this page from inside your wallet app — scan the QR with the wallet’s scanner, or paste the link into its built-in browser.');
+  }
+
+  // ── Nonces ──────────────────────────────────────────────────────────────
+  // Aster uses seconds*1e6; Hyperliquid uses milliseconds.
   function asterNonce() { return Math.floor(Date.now() / 1000) * 1000000; }
   function hlNonce() { return Date.now(); }
 
@@ -175,7 +213,7 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
     };
   }
 
-  // ── Submits ───────────────────────────────────────────────────────────
+  // ── Submits (phone/browser → venue directly; both venues allow CORS) ────
   function splitSig(sig) {
     var s = sig.slice(2);
     var v = parseInt(s.slice(128, 130), 16);
@@ -224,22 +262,49 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
     }
   }
 
-  // ── Flow ──────────────────────────────────────────────────────────────
-  btn.addEventListener('click', async function () {
-    try {
-      if (!window.ethereum) {
-        show('err', 'No wallet found in this browser. Open this page from inside your wallet app (scan the QR with the wallet’s scanner, or paste the link into its built-in browser).');
-        return;
-      }
+  // ── Wallet providers ────────────────────────────────────────────────────
+  var provider = null;
 
-      btn.disabled = true;
-      show('', 'Connecting wallet…');
-      var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-      var from = (accounts && accounts[0] ? accounts[0] : '').toLowerCase();
+  async function connectInjected() {
+    provider = window.ethereum;
+    var accounts = await provider.request({ method: 'eth_requestAccounts' });
+    return (accounts && accounts[0] ? accounts[0] : '').toLowerCase();
+  }
+
+  var _wc = null;
+  async function connectWalletConnect() {
+    if (!WC_PROJECT_ID) { throw new Error('WalletConnect is not configured.'); }
+    if (!_wc) {
+      var mod = await import(WC_MODULE);
+      _wc = await mod.EthereumProvider.init({
+        projectId: WC_PROJECT_ID,
+        chains: [wcChain],
+        optionalChains: [wcChain],
+        showQrModal: true,
+        methods: ['eth_signTypedData_v4', 'eth_requestAccounts'],
+        metadata: {
+          name: 'Colibri — builder-code approval',
+          description: 'One-time DEX builder-fee approval',
+          url: location.origin,
+          icons: [new URL('../favicon.png', location.href).href]
+        }
+      });
+    }
+    var accounts = await _wc.enable(); // opens the WalletConnect modal (QR + wallet list)
+    provider = _wc;
+    return (accounts && accounts[0] ? accounts[0] : '').toLowerCase();
+  }
+
+  // ── Flow ──────────────────────────────────────────────────────────────
+  async function runApproval(connectFn) {
+    showConnect(false);
+    show('', 'Connecting wallet…');
+    try {
+      var from = await connectFn();
       if (from !== account.toLowerCase()) {
         show('err', 'This wallet is ' + shorten(from) + ', but the connection uses ' + shorten(account) +
                     '. Switch to that account in your wallet and try again.');
-        btn.disabled = false;
+        showConnect(true);
         return;
       }
 
@@ -247,7 +312,7 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
       var typed = venueKey === 'aster' ? asterTypedData(nonce) : hlTypedData(nonce);
 
       show('', 'Confirm the signature in your wallet…');
-      var signature = await window.ethereum.request({
+      var signature = await provider.request({
         method: 'eth_signTypedData_v4',
         params: [from, JSON.stringify(typed)]
       });
@@ -263,9 +328,12 @@ key never leaves the wallet; Colibri only reads the approval back from the venue
     } catch (e) {
       var msg = (e && e.message) ? e.message : String(e);
       show('err', 'Approval failed: ' + msg);
-      btn.disabled = false;
+      showConnect(true);
     }
-  });
+  }
+
+  goInjected.addEventListener('click', function () { runApproval(connectInjected); });
+  goWc.addEventListener('click', function () { runApproval(connectWalletConnect); });
 })();
 </script>
 </body>
