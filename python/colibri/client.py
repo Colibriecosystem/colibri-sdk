@@ -29,18 +29,39 @@ class ColibriClient:
     >>> ColibriClient(18845, token="...")    # can also place / cancel orders
     """
 
-    def __init__(self, port: int | str, token: str | None = None, host: str = "127.0.0.1") -> None:
+    def __init__(
+        self, port: int | str, token: str | None = None, host: str = "127.0.0.1", timeout: float = 10.0
+    ) -> None:
         self.base = f"http://{host}:{port}"
         self._token = token or ""
+        self._timeout = timeout
 
     @classmethod
-    def discover(cls, host: str = "127.0.0.1") -> "ColibriClient":
-        """Auto-connect via the discovery file the terminal writes while the API is on."""
+    def discover(cls, host: str = "127.0.0.1", timeout: float = 10.0) -> "ColibriClient":
+        """Auto-connect via the discovery file the terminal writes while the API is on.
+
+        Raises ``FileNotFoundError`` when the terminal is closed or the Local API is off.
+        A companion tool that runs whether or not the terminal is up should poll
+        :meth:`try_discover` instead.
+        """
         app_data = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
         path = os.path.join(app_data, "Colibri", "localapi.json")
         with open(path, encoding="utf-8") as fh:
             j = json.load(fh)
-        return cls(j["port"], j["token"], host)
+        return cls(j["port"], j["token"], host, timeout)
+
+    @classmethod
+    def try_discover(cls, host: str = "127.0.0.1", timeout: float = 10.0) -> "ColibriClient | None":
+        """Like :meth:`discover`, but returns ``None`` when no terminal is reachable.
+
+        The terminal being closed (or the Local API disabled) is the NORMAL state for a
+        companion tool, not an error — so this also swallows a torn/partial discovery file
+        (the terminal rewrites it on start). Poll it; connect when it stops returning None.
+        """
+        try:
+            return cls.discover(host, timeout)
+        except (OSError, ValueError, KeyError):
+            return None
 
     # ── transport ────────────────────────────────────────────────────────────
     def _req(self, method: str, path: str, body: Any | None = None) -> Any:
@@ -52,7 +73,9 @@ class ColibriClient:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req) as resp:
+            # Always bounded: a plain urlopen() blocks forever, which hangs the caller's
+            # worker/UI thread if the terminal is wedged mid-shutdown.
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 text = resp.read().decode()
         except urllib.error.HTTPError as exc:
             text = exc.read().decode()
@@ -65,6 +88,16 @@ class ColibriClient:
     def _qs(**params: Any) -> str:
         clean = {k: v for k, v in params.items() if v is not None}
         return ("?" + urllib.parse.urlencode(clean)) if clean else ""
+
+    @staticmethod
+    def _seg(value: str) -> str:
+        """Encode one PATH SEGMENT — ``safe=""`` so a ``/`` inside a symbol is %2F.
+
+        Kraken spells every spot symbol with a slash (``BTC/USDT``, all ~1600 of them);
+        interpolated raw it becomes an extra path segment and the API answers
+        404 ``Unknown route``. Verified against a live terminal.
+        """
+        return urllib.parse.quote(value, safe="")
 
     # ── discovery ────────────────────────────────────────────────────────────
     def ping(self) -> dict:
@@ -89,15 +122,15 @@ class ColibriClient:
 
     def book(self, exchange: str, symbol: str, depth: int | None = None) -> dict:
         """GET /markets/{exchange}/{symbol}/book — dual-unit snapshot; depth = levels per side (1-500)."""
-        return self._req("GET", f"/markets/{exchange}/{symbol}/book" + self._qs(depth=depth))
+        return self._req("GET", f"/markets/{self._seg(exchange)}/{self._seg(symbol)}/book" + self._qs(depth=depth))
 
     def clusters(self, exchange: str, symbol: str, limit: int | None = None) -> dict:
         """GET /markets/{exchange}/{symbol}/clusters — raw 15-second base buckets (merge timeframes yourself); limit 1-17280 (72 h), default 240 = the last hour."""
-        return self._req("GET", f"/markets/{exchange}/{symbol}/clusters" + self._qs(limit=limit))
+        return self._req("GET", f"/markets/{self._seg(exchange)}/{self._seg(symbol)}/clusters" + self._qs(limit=limit))
 
     def funding(self, exchange: str, symbol: str) -> dict:
         """GET /markets/{exchange}/{symbol}/funding — perps only (spot answers 404 'unavailable')."""
-        return self._req("GET", f"/markets/{exchange}/{symbol}/funding")
+        return self._req("GET", f"/markets/{self._seg(exchange)}/{self._seg(symbol)}/funding")
 
     # ── orderbook settings (exchange tier) ──────────────────────────────────
     def orderbook_settings(self, exchange: str) -> dict:
