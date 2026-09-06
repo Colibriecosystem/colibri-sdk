@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Colibri Local API
-  version: "1.0.0"
+  version: "1.1.0"
   summary: Loopback HTTP + WebSocket API of the Colibri scalping terminal.
   description: |
     The Colibri Local API lets an external **widget, screener, or bot** read the order book, stream
@@ -146,8 +146,18 @@ tags:
   - name: Panels
     description: >-
       Slot control — enumerate and drive the terminal's panels by a durable slot id. A SLOT is the
-      durable box (its GUID survives an instrument change, a clear, and a restart); a PANEL is the
-      content that fills it.
+      durable box (its GUID survives an instrument change, a clear, a kind transition, and a
+      restart); a PANEL is the content that fills it.
+
+
+      **Response shapes are versioned per request** by the `api-version` header. `2` answers ONE
+      layout tree per tab (`PanelsV2Response`: a node is a `split` — `row`/`column` of children —
+      or a `slot`, a leaf IS the slot, and `content` is a union on `kind` carrying only its own
+      fields, never `null`). An absent header answers the older flat `slots` shape
+      (`PanelsResponse`, kept until terminal **1.3.0**, when v1 is removed and the header is
+      ignored). A value the terminal cannot read is refused `400 unsupported_api_version`, never
+      silently served v1. Request bodies are NOT versioned. `GET /ping` lists
+      `supportedApiVersions`.
   - name: App
     description: Other terminal gestures — combos.
   - name: Notifications & signals
@@ -644,6 +654,7 @@ paths:
         window (positional — out-of-range yields an empty tree); `tabId` keeps only that tab's
         window/tab (durable id — no match is `404 unknown_tab`). Both combine as an intersection.
       parameters:
+        - $ref: "#/components/parameters/apiVersionHeader"
         - name: tabId
           in: query
           required: false
@@ -659,11 +670,15 @@ paths:
             minimum: 0
       responses:
         "200":
-          description: The tree.
+          description: >-
+            The tree — `PanelsV2Response` at `api-version: 2`, `PanelsResponse` (v1, until 1.3.0)
+            otherwise.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PanelsResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/PanelsV2Response"
+                  - $ref: "#/components/schemas/PanelsResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -675,14 +690,21 @@ paths:
     post:
       operationId: addPanel
       tags: [Panels]
-      summary: Add a panel (or an empty box) to a tab
+      summary: Add a box, a positioned stack of boxes, or an empty box to a tab
       description: >-
-        Add a slot to the tab `tabId` (the ACTIVE tab when omitted). With `content` — one
-        instrument + the views that render it; with `content` null/absent — an EMPTY "+" box
-        (reserve now, fill later by its durable id via PUT). `activate: true` surfaces the terminal
-        window afterwards — the "see the move → open the book" gesture (default false so a
-        background layout tool never steals focus). Adding is a display action — token-gated only;
-        a `content.connectionId` binds a trading account and is **grant-gated**.
+        Add to the tab `tabId` (the ACTIVE tab when omitted). `contents` is an ordered STACK — each
+        item its own box (at most 16), optionally positioned by `target` beside an existing slot
+        (the drag-drop vocabulary) and sized by per-item `share`, stacked per `orientation`.
+        `content` is ONE box: a placeable content (`{kind, exchange, symbol, …}`), or
+        `{kind:"empty"}` / null / absent for an EMPTY "+" box (reserve now, fill later by its durable
+        id via PUT); the legacy `{exchange, symbol, views}` form is still accepted. `contents` and
+        `content` are mutually exclusive. A widget is never placed through the API (`400`).
+        `activate: true` surfaces the terminal window afterwards — the "see the move → open the
+        book" gesture (default false so a background layout tool never steals focus). Adding is a
+        display action — token-gated only; a `connectionId` binds a trading account and is
+        **grant-gated**.
+      parameters:
+        - $ref: "#/components/parameters/apiVersionHeader"
       requestBody:
         required: false
         content:
@@ -691,11 +713,15 @@ paths:
               $ref: "#/components/schemas/AddPanelBody"
       responses:
         "201":
-          description: Added — `panel` is the created slot (drive it by `panel.slotId` from now on).
+          description: >-
+            Added — at `api-version: 2` a `SlotActionResponse` (`slot` = the first box, `slots` =
+            every box a stack created, in request order); otherwise the v1 `PanelActionResponse`.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PanelActionResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/SlotActionResponse"
+                  - $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "403":
@@ -708,17 +734,51 @@ paths:
                 $ref: "#/components/schemas/Error"
 
   /app/panels/{id}:
+    get:
+      operationId: getPanel
+      tags: [Panels]
+      summary: One slot and where it sits
+      description: >-
+        The slot — at `api-version: 2` byte-identical to its leaf in the tree (`share` included) —
+        plus its `position`: the window, the tab's durable id, the index chain from the tab root,
+        the depth, and the parent split (`{orientation, index, count}`, present exactly when the
+        slot is not a root). This is what a tool holding a slot id asks instead of enumerating the
+        workspace, and where "the box next to this one" comes from.
+      parameters:
+        - $ref: "#/components/parameters/apiVersionHeader"
+        - $ref: "#/components/parameters/slotIdPath"
+      responses:
+        "200":
+          description: The slot and its position — `SlotLookupResponse` at v2, `PanelLookupResponse` (v1) otherwise.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SlotLookupResponse"
+                  - $ref: "#/components/schemas/PanelLookupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No slot with that id (code `unknown_panel`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     put:
       operationId: setPanel
       tags: [Panels]
-      summary: Idempotently set a slot's desired state
+      summary: Idempotently set what ONE box holds
       description: >-
-        Declaratively reconcile the slot to the desired state: change the instrument, switch views
-        (kind transitions are fine — an orderbook box can become a chart box and back; the id never
-        changes), or bind an account via `content.connectionId` (**grant-gated**; requires the
-        orderbook view — omitted = keep the slot's current account). `content` null/absent CLEARS
-        the slot — the box stays on screen and keeps its id.
+        Declaratively set the slot's content: `content: {kind:"orderbook"|"chart", …}` changes the
+        instrument or the kind (an orderbook box can become a chart box and back; the id never
+        changes) — a chart docked beside the box is its own box and is left alone; `connectionId`
+        binds an account (**grant-gated**; orderbook only — omitted = keep the slot's current
+        account). `content: {kind:"empty"}` / null / absent CLEARS the slot — the box stays on
+        screen and keeps its id. The legacy `{exchange, symbol, views}` form is still accepted (and,
+        unlike the `kind` form, reconciles the paired chart as part of the instrument's desired
+        state). On a widget box every set is refused `409 slot_occupied_by_widget`.
       parameters:
+        - $ref: "#/components/parameters/apiVersionHeader"
         - $ref: "#/components/parameters/slotIdPath"
       requestBody:
         required: false
@@ -728,11 +788,13 @@ paths:
               $ref: "#/components/schemas/SetSlotBody"
       responses:
         "200":
-          description: Reconciled — `panel` reflects the slot's new state.
+          description: Reconciled — `slot` (v2) / `panel` (v1) reflects the box's new state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PanelActionResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/SlotActionResponse"
+                  - $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "403":
@@ -743,20 +805,29 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: The box holds a widget — the API can see one but never starts or stops one (code `slot_occupied_by_widget`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       operationId: removePanel
       tags: [Panels]
       summary: Remove the slot
-      description: Remove the slot entirely (structural — its paired chart goes with it).
+      description: Remove the slot entirely (structural — its paired chart goes with it). A widget box IS removable this way — a deliberate removal by id, not an accident.
       parameters:
+        - $ref: "#/components/parameters/apiVersionHeader"
         - $ref: "#/components/parameters/slotIdPath"
       responses:
         "200":
-          description: Removed.
+          description: Removed — `SlotActionResponse` (v2) / `PanelActionResponse` (v1).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PanelActionResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/SlotActionResponse"
+                  - $ref: "#/components/schemas/PanelActionResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1014,6 +1085,19 @@ components:
       description: A connection id from `GET /connections`.
       schema:
         type: string
+    apiVersionHeader:
+      name: api-version
+      in: header
+      required: false
+      description: >-
+        The response-shape version the caller reads: `2` = the layout-tree shapes, absent = v1 (the
+        older flat shapes, kept until terminal 1.3.0, when v1 is removed and this header is
+        ignored). Anything the terminal cannot read as a plain positive integer, or a version it
+        does not serve, is refused `400 unsupported_api_version` — never silently served v1.
+      schema:
+        type: integer
+        enum: [1, 2]
+        default: 1
     slotIdPath:
       name: id
       in: path
@@ -1087,6 +1171,8 @@ components:
             - unknown_symbol
             - unknown_panel
             - unknown_tab
+            - slot_occupied_by_widget
+            - unsupported_api_version
             - trading_not_enabled
             - permission_denied
             - not_ready
@@ -1112,10 +1198,15 @@ components:
           description: The terminal's build version.
         apiVersion:
           type: integer
-          description: The Local API protocol version (currently 1).
+          description: The Local API protocol version (currently 1) — what an UNVERSIONED request gets.
         port:
           type: integer
           description: The live bound port (useful when the preferred port was taken).
+        supportedApiVersions:
+          type: array
+          description: Every response-shape version the `api-version` header may select (absent on a terminal that predates versioning — read it as `[1]`).
+          items:
+            type: integer
 
     ExchangeDto:
       type: object
@@ -1628,9 +1719,16 @@ components:
 
     PanelChart:
       type: object
-      description: The chart paired into a slot's column.
-      required: [exchange, symbol, interval, contentId]
+      deprecated: true
+      description: >-
+        v1 only — the chart paired into a slot's column, mirrored on its orderbook's entry. A docked
+        chart is really its own box (its own `slots` entry, its own `slotId`); this mirror goes with
+        v1 at 1.3.0.
+      required: [exchange, symbol, interval, contentId, slotId]
       properties:
+        slotId:
+          type: string
+          description: The chart box's OWN durable id — the handle PUT/DELETE take for it.
         exchange:
           type: string
         symbol:
@@ -1644,11 +1742,14 @@ components:
 
     Panel:
       type: object
+      deprecated: true
       description: >-
-        One slot. `slotId` is the durable box handle (the op key — survives an instrument change,
-        a clear, and a restart); `contentId` is the per-instrument id (changes with the
-        instrument).
-      required: [slotId, kind, empty, exchange, symbol, contentId, connectionId, viewOnly, chart]
+        v1 only (until 1.3.0) — one slot as a nullable bag. `slotId` is the durable box handle (the
+        op key — survives an instrument change, a clear, and a restart); `contentId` is the
+        per-instrument id (changes with the instrument). Every content kind is its own entry —
+        a docked chart appears as its own `kind:"chart"` entry AND (deprecated) as `chart` on its
+        orderbook's entry. Prefer the v2 `SlotNode`.
+      required: [slotId, kind, empty, exchange, symbol, contentId, connectionId, viewOnly, chart, widget, path]
       properties:
         slotId:
           type: string
@@ -1656,7 +1757,17 @@ components:
         kind:
           type: string
           description: What fills the slot.
-          enum: [orderbook, chart, empty]
+          enum: [orderbook, chart, widget, empty]
+        widget:
+          oneOf:
+            - $ref: "#/components/schemas/PanelWidget"
+            - type: "null"
+          description: The widget box, when `kind` is `widget`.
+        path:
+          type: array
+          description: The index chain from the tab root (`[0, 1]`), so a caller can find neighbours without walking the tree.
+          items:
+            type: integer
         empty:
           type: boolean
           description: true = the "+" placeholder (no content).
@@ -1689,10 +1800,53 @@ components:
             - type: "null"
           description: The chart paired into the slot's column, when present.
 
+    PanelWidget:
+      type: object
+      description: v1 — a widget box. `instanceId` is the same value the widget's own handshake carries.
+      required: [widgetId, instanceId, name, installed]
+      properties:
+        widgetId:
+          type: string
+        instanceId:
+          type: string
+        name:
+          type: string
+        installed:
+          type: boolean
+          description: false = the not-installed / revoked placeholder that still holds the box.
+
+    PanelNode:
+      type: object
+      deprecated: true
+      description: v1 — a node of the tab's layout tree as a nullable bag (`split` with `orientation` + `children`, or `leaf` with `slot`).
+      required: [type, orientation, share, children, slot]
+      properties:
+        type:
+          type: string
+          enum: [split, leaf]
+        orientation:
+          type:
+            - string
+            - "null"
+          enum: [horizontal, vertical, null]
+        share:
+          type: number
+        children:
+          type:
+            - array
+            - "null"
+          items:
+            $ref: "#/components/schemas/PanelNode"
+        slot:
+          oneOf:
+            - $ref: "#/components/schemas/Panel"
+            - type: "null"
+
     Tab:
       type: object
-      description: One tab, keyed by its durable `uuid` — the add target for `POST /app/panels`.
-      required: [uuid, index, slots]
+      deprecated: true
+      description: v1 only (until 1.3.0) — one tab, keyed by its durable `uuid`, carrying BOTH the flat `slots` and the same set as a `tree`.
+      required: [uuid, index, slots, tree]
       properties:
         uuid:
           type: string
@@ -1704,10 +1858,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Panel"
+        tree:
+          oneOf:
+            - $ref: "#/components/schemas/PanelNode"
+            - type: "null"
 
     Window:
       type: object
-      description: One window, keyed by position (durable window ids are a later addition).
+      deprecated: true
+      description: v1 — one window, keyed by position.
       required: [index, tabs]
       properties:
         index:
@@ -1720,6 +1879,8 @@ components:
 
     PanelsResponse:
       type: object
+      deprecated: true
+      description: v1 (unversioned request) — kept until terminal 1.3.0.
       required: [windows]
       properties:
         windows:
@@ -1727,14 +1888,358 @@ components:
           items:
             $ref: "#/components/schemas/Window"
 
+    PanelPosition:
+      type: object
+      deprecated: true
+      description: v1 — where a slot sits.
+      required: [windowIndex, tabId, tabIndex, path, depth, parentOrientation, siblingIndex, siblingCount, share]
+      properties:
+        windowIndex:
+          type: integer
+        tabId:
+          type: string
+        tabIndex:
+          type: integer
+        path:
+          type: array
+          items:
+            type: integer
+        depth:
+          type: integer
+        parentOrientation:
+          type:
+            - string
+            - "null"
+        siblingIndex:
+          type: integer
+        siblingCount:
+          type: integer
+        share:
+          type: number
+
+    PanelLookupResponse:
+      type: object
+      deprecated: true
+      description: v1 — `GET /app/panels/{id}`.
+      required: [panel, position]
+      properties:
+        panel:
+          $ref: "#/components/schemas/Panel"
+        position:
+          $ref: "#/components/schemas/PanelPosition"
+
+    # ── api-version 2 ──────────────────────────────────────────────────────────
+
+    LayoutNode:
+      description: >-
+        A node of a tab's layout tree — discriminated on `type`. `share` is the node's fraction of
+        its parent and is ABSENT on the root (which has no parent to be a fraction of).
+      oneOf:
+        - $ref: "#/components/schemas/SplitNode"
+        - $ref: "#/components/schemas/SlotNode"
+      discriminator:
+        propertyName: type
+        mapping:
+          split: "#/components/schemas/SplitNode"
+          slot: "#/components/schemas/SlotNode"
+
+    SplitNode:
+      type: object
+      description: A split — `row` lays its children side by side, `column` stacks them.
+      required: [type, orientation, children]
+      properties:
+        type:
+          type: string
+          enum: [split]
+        orientation:
+          type: string
+          enum: [row, column]
+        share:
+          type: number
+          description: This node's fraction of its parent; absent on the root.
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/LayoutNode"
+
+    SlotNode:
+      type: object
+      description: A slot — the durable box (`id` is the handle set / clear / remove take) with what fills it. A leaf IS the slot.
+      required: [type, id, content]
+      properties:
+        type:
+          type: string
+          enum: [slot]
+        id:
+          type: string
+          description: The durable slot id — survives an instrument change, a clear, a kind transition, and a restart.
+        share:
+          type: number
+          description: This node's fraction of its parent; absent on a root slot and on action responses.
+        content:
+          $ref: "#/components/schemas/SlotContent"
+
+    SlotContent:
+      description: >-
+        What a slot holds — discriminated on `kind`; each variant carries only the fields that mean
+        something for it, never `null`. `contentId` is UNIFORM across the filled kinds: the
+        identity of the content itself (a per-instrument panel id; a widget's instance id — the
+        value its own handshake carries), distinct from the slot `id` and changing on a re-pick.
+      oneOf:
+        - $ref: "#/components/schemas/EmptyContent"
+        - $ref: "#/components/schemas/OrderbookContent"
+        - $ref: "#/components/schemas/ChartContent"
+        - $ref: "#/components/schemas/WidgetContent"
+      discriminator:
+        propertyName: kind
+        mapping:
+          empty: "#/components/schemas/EmptyContent"
+          orderbook: "#/components/schemas/OrderbookContent"
+          chart: "#/components/schemas/ChartContent"
+          widget: "#/components/schemas/WidgetContent"
+
+    EmptyContent:
+      type: object
+      description: The "+" placeholder — a box a caller may fill.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [empty]
+
+    OrderbookContent:
+      type: object
+      required: [kind, exchange, symbol, contentId, viewOnly]
+      properties:
+        kind:
+          type: string
+          enum: [orderbook]
+        exchange:
+          type: string
+        symbol:
+          type: string
+        contentId:
+          type: string
+          description: The per-instrument panel id — changes on a re-pick, unlike the slot `id`.
+        connectionId:
+          type: string
+          description: The bound trading account — present only when one is bound.
+        viewOnly:
+          type: boolean
+          description: true = no trading through this box (no account, or trading disabled on it).
+
+    ChartContent:
+      type: object
+      required: [kind, exchange, symbol, interval, contentId]
+      properties:
+        kind:
+          type: string
+          enum: [chart]
+        exchange:
+          type: string
+        symbol:
+          type: string
+        interval:
+          type: string
+          description: The chart timeframe (e.g. `M1`, `M5`).
+        contentId:
+          type: string
+
+    WidgetContent:
+      type: object
+      description: A widget box. The API can SEE one; it never starts or stops one (every write to it is `409`).
+      required: [kind, widgetId, contentId, name, installed]
+      properties:
+        kind:
+          type: string
+          enum: [widget]
+        widgetId:
+          type: string
+        contentId:
+          type: string
+          description: The widget instance id — the same value that widget's own handshake carries.
+        name:
+          type: string
+        installed:
+          type: boolean
+          description: false = the not-installed / revoked placeholder that still holds the box.
+
+    TabV2:
+      type: object
+      description: One tab, keyed by its durable `id` — the `tabId` an add targets.
+      required: [id, index, active, title, layout]
+      properties:
+        id:
+          type: string
+          description: 'The tab''s durable id (copy: right-click a tab header → "Copy tab ID").'
+        index:
+          type: integer
+          description: Positional index within the window.
+        active:
+          type: boolean
+          description: Whether this is the tab its window shows.
+        title:
+          type: string
+          description: The header label as rendered (the custom name, else the automatic coin + count).
+        layout:
+          oneOf:
+            - $ref: "#/components/schemas/LayoutNode"
+            - type: "null"
+          description: The whole layout tree; a single-box tab has a `slot` root. Null for a never-laid-out tab.
+
+    WindowV2:
+      type: object
+      description: One window, keyed by position (0 = the main window; durable ids are a later addition).
+      required: [index, active, tabs]
+      properties:
+        index:
+          type: integer
+        active:
+          type: boolean
+          description: Whether this is the OS-active window.
+        tabs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TabV2"
+
+    PanelsV2Response:
+      type: object
+      description: "`GET /app/panels` at `api-version: 2` — nothing is serialized twice."
+      required: [windows]
+      properties:
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/WindowV2"
+
+    SlotParent:
+      type: object
+      description: The parent split of a slot — its axis, the slot's index among the siblings, and how many there are.
+      required: [orientation, index, count]
+      properties:
+        orientation:
+          type: string
+          enum: [row, column]
+        index:
+          type: integer
+        count:
+          type: integer
+
+    SlotPosition:
+      type: object
+      description: Where one slot sits, relative to its tab's root.
+      required: [window, tab, path, depth]
+      properties:
+        window:
+          type: integer
+        tab:
+          type: string
+          description: The tab's durable id.
+        path:
+          type: array
+          description: The index chain from the tab root; empty for a root slot.
+          items:
+            type: integer
+        depth:
+          type: integer
+        parent:
+          $ref: "#/components/schemas/SlotParent"
+
+    SlotLookupResponse:
+      type: object
+      description: "`GET /app/panels/{id}` at v2 — the slot, byte-identical to its leaf in the tree, plus where it sits."
+      required: [slot, position]
+      properties:
+        slot:
+          $ref: "#/components/schemas/SlotNode"
+        position:
+          $ref: "#/components/schemas/SlotPosition"
+
+    SlotActionResponse:
+      type: object
+      description: Result of an add / set / clear / remove at v2 — the affected box(es) in the tree's own leaf shape.
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "`added` (POST) / `ok` (PUT) / `removed` (DELETE)."
+        slot:
+          $ref: "#/components/schemas/SlotNode"
+        slots:
+          type: array
+          description: Every box a stack add created, in request order.
+          items:
+            $ref: "#/components/schemas/SlotNode"
+
+    PlaceableContent:
+      description: >-
+        One content to PLACE — the read side's union minus the ids the terminal mints. A widget is
+        never placed through the API (`400`). `share` (0–1, exclusive) sizes the box within a stack.
+      oneOf:
+        - type: object
+          required: [kind, exchange, symbol]
+          properties:
+            kind:
+              type: string
+              enum: [orderbook]
+            exchange:
+              type: string
+            symbol:
+              type: string
+            connectionId:
+              type: string
+              description: Binds a trading account (GRANT-gated). Omitted = the app adopts the venue's default connection.
+            share:
+              type: number
+        - type: object
+          required: [kind, exchange, symbol]
+          properties:
+            kind:
+              type: string
+              enum: [chart]
+            exchange:
+              type: string
+            symbol:
+              type: string
+            interval:
+              type: string
+              description: The timeframe (e.g. `M5`); omitted = the app default.
+            share:
+              type: number
+
+    PanelTarget:
+      type: object
+      description: Where a stack lands — beside `slotId` on `side`, using the drag-drop `action` vocabulary. Absent ⇒ appended to the tab's root row.
+      required: [slotId]
+      properties:
+        slotId:
+          type: string
+        side:
+          type: string
+          enum: [left, right, top, bottom]
+          default: bottom
+        action:
+          type: string
+          enum: [pair, row, column, intoRow]
+          default: pair
+
     PanelContent:
       type: object
       description: >-
-        The desired slot content: ONE instrument + the views that render it. `views` is
-        `["orderbook"]`, `["chart"]` (a standalone chart slot), or `["orderbook","chart"]` (the
-        pair — chart stacked in the orderbook's column, same instrument, app-default timeframe).
-      required: [exchange, symbol, views]
+        The desired slot content, in one of two forms told apart by `kind`. With `kind`
+        (`orderbook` | `chart` | `empty`): ONE content, the same shape as `PlaceableContent`
+        (`empty` = clear on PUT, a bare box on POST). Without `kind` (the legacy form): ONE
+        instrument + the `views` that render it — `["orderbook"]`, `["chart"]`, or
+        `["orderbook","chart"]` (the pair — chart stacked in the orderbook's column, same
+        instrument, app-default timeframe).
+      required: [exchange, symbol]
       properties:
+        kind:
+          type: string
+          enum: [orderbook, chart, empty]
+        interval:
+          type: string
+          description: "A chart's timeframe (with `kind: chart`); omitted = the app default."
         connectionId:
           type: string
           description: >-
@@ -1761,11 +2266,23 @@ components:
         tabId:
           type: string
           description: Target tab (durable id); omitted = the ACTIVE tab.
+        contents:
+          type: array
+          description: An ordered STACK — each item its own box, at most 16. Mutually exclusive with `content`.
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/PlaceableContent"
+        target:
+          $ref: "#/components/schemas/PanelTarget"
+        orientation:
+          type: string
+          description: How the stack's items stack relative to each other (default `column`; the v1 words `horizontal`/`vertical` are also accepted).
+          enum: [row, column, horizontal, vertical]
         content:
           oneOf:
             - $ref: "#/components/schemas/PanelContent"
             - type: "null"
-          description: The panel content; null/absent adds an EMPTY "+" box (reserve now, fill later via PUT).
+          description: ONE box; null/absent (or `kind:"empty"`) adds an EMPTY "+" box (reserve now, fill later via PUT).
         activate:
           type: boolean
           default: false
@@ -1775,17 +2292,24 @@ components:
 
     SetSlotBody:
       type: object
-      description: The slot's desired state.
+      description: What the box should hold.
       properties:
         content:
           oneOf:
             - $ref: "#/components/schemas/PanelContent"
             - type: "null"
-          description: null/absent = CLEAR the slot (the box stays, same id).
+          description: null/absent (or `kind:"empty"`) = CLEAR the slot (the box stays, same id).
+        contents:
+          type: array
+          description: The one-item stack form (exactly one item) — equivalent to `content` with `kind`.
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/PlaceableContent"
 
     PanelActionResponse:
       type: object
-      description: Result of an add / set / remove — the status plus the affected slot.
+      deprecated: true
+      description: v1 — result of an add / set / remove; `panel` is the primary box, `panels` every box a stack created.
       required: [status, panel]
       properties:
         status:
@@ -1796,6 +2320,12 @@ components:
             - $ref: "#/components/schemas/Panel"
             - type: "null"
           description: The affected slot's state after the operation.
+        panels:
+          type:
+            - array
+            - "null"
+          items:
+            $ref: "#/components/schemas/Panel"
 
     OpenComboBody:
       type: object

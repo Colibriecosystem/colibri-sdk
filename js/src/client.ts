@@ -1,4 +1,5 @@
 import { ColibriSocket } from "./socket.js";
+import { API_VERSION } from "./types.js";
 import type {
   Balance,
   Book,
@@ -9,9 +10,13 @@ import type {
   Order,
   OrderAccepted,
   OrderbookSettings,
-  PanelActionResult,
+  AddPanelsBody,
+  EmptyContent,
   PanelContent,
   PanelWindow,
+  PlaceableContent,
+  SlotAction,
+  SlotLookup,
   Ping,
   PlaceOrder,
   Position,
@@ -79,6 +84,9 @@ export class ColibriClient {
     const res = await fetch(this.base + path, {
       method,
       headers: {
+        // The response-shape version this SDK reads (see API_VERSION). Only /app/panels has two
+        // shapes today; every other route ignores it.
+        "api-version": String(API_VERSION),
         // Omitted entirely when no token was supplied — open routes take no credential, and
         // sending `Bearer ` would be a malformed header rather than "no auth".
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
@@ -199,7 +207,7 @@ export class ColibriClient {
     exchange: string,
     symbol: string,
     opts: { connectionId?: string; views?: ("orderbook" | "chart")[] } = {},
-  ): Promise<PanelActionResult> {
+  ): Promise<SlotAction> {
     return this.addPanel({
       activate: true,
       content: { exchange, symbol, views: opts.views ?? ["orderbook"], connectionId: opts.connectionId },
@@ -210,12 +218,14 @@ export class ColibriClient {
     return this.req("POST", "/app/combos", { symbol, target });
   }
 
-  // ── panel control (/app/panels) ───────────────────────────────────────────
-  // A SLOT is the durable box — its GUID `slotId` survives an instrument change, a clear, and a
-  // terminal restart, so a tool can drive the same box forever. Add/change/clear are token-gated;
-  // a `connectionId` in a body binds a trading account and needs a per-connection GRANT.
+  // ── panel control (/app/panels, api-version 2) ───────────────────────────
+  // A SLOT is the durable box — its GUID `id` survives an instrument change, a clear, a kind
+  // transition, and a terminal restart, so a tool can drive the same box forever. A tab is ONE
+  // layout tree where a leaf IS the slot. Add/change/clear are token-gated; a `connectionId` in a
+  // body binds a trading account and needs a per-connection GRANT. A widget box is visible here
+  // but never placed, changed or cleared through the API (409).
 
-  /** The window → tab → slot tree. Scope with `tabId` (durable) and/or `windowIndex` (positional). */
+  /** The window → tab → layout tree. Scope with `tabId` (durable) and/or `windowIndex` (positional). */
   panels(opts: { tabId?: string; windowIndex?: number } = {}): Promise<PanelWindow[]> {
     const q = new URLSearchParams();
     if (opts.tabId) q.set("tabId", opts.tabId);
@@ -224,28 +234,40 @@ export class ColibriClient {
     return this.req<{ windows: PanelWindow[] }>("GET", `/app/panels${qs ? "?" + qs : ""}`).then((r) => r.windows);
   }
 
-  /**
-   * Add a panel to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab
-   * header's right-click menu). `content` is ONE instrument + its views; omit it to add an EMPTY
-   * "+" box instead — reserve now, fill later by its durable id via {@link setPanel} (each empty
-   * add reserves a fresh box). `activate: true` surfaces the terminal window afterwards (default
-   * false so a background layout tool never steals focus).
-   */
-  addPanel(body: { tabId?: string; content?: PanelContent; activate?: boolean } = {}): Promise<PanelActionResult> {
-    return this.req("POST", "/app/panels", body);
+  /** One slot — byte-identical to its leaf in the tree — plus where it sits (its parent split, path, depth). */
+  panel(slotId: string): Promise<SlotLookup> {
+    return this.req("GET", `/app/panels/${enc(slotId)}`);
   }
 
   /**
-   * Idempotently set a slot's desired state: change the instrument, switch views (a kind
-   * transition — an orderbook box can become a chart box and back; the id never changes), bind an
-   * account — or CLEAR it by omitting `content` (the box stays and keeps its id).
+   * Add to a tab (the ACTIVE tab when `tabId` is omitted — copy a tab's id via the tab header's
+   * right-click menu). `contents` is an ordered STACK, each item its own box, optionally
+   * positioned by `target` (beside an existing slot, the drag-drop vocabulary) and sized by
+   * per-item `share`; `content` is ONE box (`{kind:"empty"}` or an empty body reserves a bare "+"
+   * box — fill it later by its durable id via {@link setPanel}). `activate: true` surfaces the
+   * terminal window afterwards (default false so a background layout tool never steals focus).
    */
-  setPanel(slotId: string, content?: PanelContent): Promise<PanelActionResult> {
+  addPanel(body: AddPanelsBody = {}): Promise<SlotAction> {
+    return this.req("POST", "/app/panels", body);
+  }
+
+  /** {@link addPanel} for a stack: `contents` in order, positioned by `target`, stacked per `orientation`. */
+  addPanels(contents: PlaceableContent[], opts: Omit<AddPanelsBody, "contents" | "content"> = {}): Promise<SlotAction> {
+    return this.addPanel({ ...opts, contents });
+  }
+
+  /**
+   * Idempotently set what ONE box holds: `{kind:"orderbook"|"chart", …}` (a kind transition is
+   * fine — the id never changes; a chart docked beside the box is its own box and is left alone),
+   * or omit `content` / pass `{kind:"empty"}` to CLEAR it (the box stays and keeps its id). The
+   * legacy `views` form is still accepted. On a widget box every set is refused (409).
+   */
+  setPanel(slotId: string, content?: PlaceableContent | EmptyContent | PanelContent): Promise<SlotAction> {
     return this.req("PUT", `/app/panels/${enc(slotId)}`, { content });
   }
 
   /** Remove the slot entirely (its paired chart goes with it). */
-  removePanel(slotId: string): Promise<PanelActionResult> {
+  removePanel(slotId: string): Promise<SlotAction> {
     return this.req("DELETE", `/app/panels/${enc(slotId)}`);
   }
 

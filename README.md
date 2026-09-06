@@ -78,9 +78,13 @@ place / cancel / bulk cancel (`/connections/{id}/orders`), close positions
 (`/connections/{id}/positions`), and the all-granted sweeps (`DELETE /orders`,
 `DELETE /positions`). Bridge: open a symbol or combo in the terminal, raise a toast, post a market
 signal, manage price-alert signal levels (incl. the triggered-lifecycle sweep). **Panel control**
-(`/app/panels`): enumerate the terminal's window → tab → slot tree and drive any panel by its
-**durable slot id** (survives an instrument change, a clear, and restart) — add / change / clear /
-remove a panel, pair a chart, bind a granted trading account. Stream: `book`, `trades`, `funding`,
+(`/app/panels`, `api-version: 2`): read the terminal's window → tab → **layout tree** — a split is a
+`row`/`column` of children, a leaf IS the slot, and what fills it is a union on `kind`
+(`orderbook` | `chart` | `widget` | `empty`) — and drive any box by its **durable slot id** (survives
+an instrument change, a clear, a kind transition, and restart): add one box or a positioned STACK,
+change / clear / remove, bind a granted trading account, ask where a slot sits. Every SDK here
+sends `api-version: 2`; an unversioned request still gets the older flat shape until terminal
+1.3.0 removes it. Stream: `book`, `trades`, `funding`,
 `positions`, `orders`, `balance`, `notifications`, `signalLevels`.
 
 See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract.
@@ -97,7 +101,7 @@ in `dotnet/Colibri.Sdk.Examples`):
 | `account` | connections · positions · orders · balance |
 | `trading` | place · cancel · bulk cancel · all-granted sweeps *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
 | `app-and-signals` | open-symbol · combo · notify · signal · signal-levels CRUD + triggered sweep |
-| `panels` | panel control: tree → add → change (id stable) → clear → remove |
+| `panels` | panel control (api-version 2): layout tree → add → where am I → change (id stable) → kind transition → a positioned stack → clear → remove |
 | `orderbook-stream` / `live-trades` | focused WebSocket streams |
 | `stream-all` | every WS channel at once |
 
