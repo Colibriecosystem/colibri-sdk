@@ -18,6 +18,14 @@ class ColibriError(Exception):
         self.code = code
 
 
+# The response-shape version this SDK is written against, sent as the ``api-version`` header on
+# every call. Today only the ``/app/panels`` family has two shapes; every other route ignores it. A
+# terminal that predates v2 ignores the header and answers v1 — so this SDK needs a terminal that
+# serves v2 (check ``supportedApiVersions`` on ``/ping``). From terminal 1.3.0 v1 is removed and the
+# header is ignored.
+API_VERSION = 2
+
+
 class ColibriClient:
     """
     Talk to a running Colibri terminal over the loopback Local API.
@@ -69,6 +77,9 @@ class ColibriClient:
         # Omitted entirely without a token — open routes take no credential, and a bare
         # "Bearer " is a malformed header rather than "no auth".
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        # The response-shape version this SDK reads (see API_VERSION). Only /app/panels has two
+        # shapes today; every other route ignores it.
+        headers["api-version"] = str(API_VERSION)
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
@@ -220,40 +231,83 @@ class ColibriClient:
         """POST /app/combos — fan the coin across every connection that lists it. target: tab|window."""
         return self._req("POST", "/app/combos", {"symbol": symbol, "target": target})
 
-    # ── panel control (/app/panels) ──────────────────────────────────────────
-    # A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
-    # terminal restart. content is ONE instrument + the views that render it:
-    #   {"exchange": ..., "symbol": ..., "views": ["orderbook"] | ["chart"] | ["orderbook","chart"],
-    #    "connectionId"?: ...}
-    # connectionId binds a trading account (grant-gated; requires the orderbook view); omitted =
-    # the app adopts the venue's default connection by itself.
+    # ── panel control (/app/panels, api-version 2) ───────────────────────────
+    # A SLOT is the durable box — its GUID id survives an instrument change, a clear, a kind
+    # transition, and a terminal restart. A tab is ONE layout tree: a node is
+    #   {"type": "split", "orientation": "row"|"column", "share"?: float, "children": [...]}
+    #   {"type": "slot", "id": ..., "share"?: float, "content": {...}}
+    # and a leaf IS the slot. content is a union on "kind" carrying only its own fields:
+    #   {"kind": "empty"}
+    #   {"kind": "orderbook", "exchange", "symbol", "contentId", "connectionId"?, "viewOnly"}
+    #   {"kind": "chart", "exchange", "symbol", "interval", "contentId"}
+    #   {"kind": "widget", "widgetId", "contentId", "name", "installed"}
+    # A content to PLACE is the same minus the ids the terminal mints:
+    #   {"kind": "orderbook", "exchange": ..., "symbol": ..., "connectionId"?: ..., "share"?: ...}
+    #   {"kind": "chart", "exchange": ..., "symbol": ..., "interval"?: ..., "share"?: ...}
+    # connectionId binds a trading account (grant-gated); omitted = the app adopts the venue's
+    # default connection by itself. A widget is never placed (400); a widget box refuses every
+    # set (409). The legacy {"exchange", "symbol", "views": [...]} form is still accepted.
 
     def panels(self, tab_id: str | None = None, window_index: int | None = None) -> list[dict]:
-        """The window → tab → slot tree, optionally scoped to one tab (durable id) / window (index)."""
+        """The window → tab → layout tree, optionally scoped to one tab (durable id) / window (index).
+
+        Each window is {"index", "active", "tabs": [{"id", "index", "active", "title", "layout"}]}.
+        """
         return self._req("GET", "/app/panels" + self._qs(tabId=tab_id, windowIndex=window_index))["windows"]
 
-    def add_panel(self, content: dict | None = None, tab_id: str | None = None, activate: bool = False) -> dict:
-        """Add a panel to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id).
+    def panel(self, slot_id: str) -> dict:
+        """One slot — byte-identical to its leaf in the tree — plus where it sits.
 
-        content=None adds an EMPTY "+" box instead — reserve now, fill later by its durable id via
-        set_panel (each empty add reserves a fresh box). activate=True surfaces the terminal window
-        afterwards (default False so a background layout tool never steals focus).
+        Returns {"slot": {...}, "position": {"window", "tab", "path", "depth", "parent"?}} where
+        parent = {"orientation", "index", "count"} is present exactly when the slot is not a root.
+        """
+        return self._req("GET", f"/app/panels/{self._seg(slot_id)}")
+
+    def add_panel(self, content: dict | None = None, tab_id: str | None = None, activate: bool = False) -> dict:
+        """Add ONE box to a tab (the ACTIVE tab when tab_id is omitted — right-click a tab header to copy its id).
+
+        content is a placeable content ({"kind": "orderbook"|"chart", ...}); None or
+        {"kind": "empty"} adds an EMPTY "+" box instead — reserve now, fill later by its durable id
+        via set_panel. activate=True surfaces the terminal window afterwards (default False so a
+        background layout tool never steals focus). Answers {"status": "added", "slot": {...}}.
         """
         body: dict[str, Any] = {"tabId": tab_id, "content": content}
         if activate:
             body["activate"] = True
         return self._req("POST", "/app/panels", {k: v for k, v in body.items() if v is not None})
 
-    def set_panel(self, slot_id: str, content: dict | None = None) -> dict:
-        """Idempotently set a slot's desired state — instrument, views (kind transitions ok), account.
+    def add_panels(
+        self,
+        contents: list[dict],
+        tab_id: str | None = None,
+        target: dict | None = None,
+        orientation: str | None = None,
+        activate: bool = False,
+    ) -> dict:
+        """Add an ordered STACK of boxes (each item its own box, at most 16).
 
-        content=None CLEARS the slot (the box stays and keeps its id).
+        target = {"slotId": ..., "side"?: "left"|"right"|"top"|"bottom", "action"?: "pair"|"row"|
+        "column"|"intoRow"} positions the stack beside an existing slot (omitted = appended to the
+        tab's root row); orientation ("row"|"column", default "column") is how the items stack.
+        Answers {"status": "added", "slot": <first>, "slots": [<every box, in order>]}.
         """
-        return self._req("PUT", f"/app/panels/{slot_id}", {"content": content} if content is not None else {})
+        body: dict[str, Any] = {"tabId": tab_id, "contents": contents, "target": target, "orientation": orientation}
+        if activate:
+            body["activate"] = True
+        return self._req("POST", "/app/panels", {k: v for k, v in body.items() if v is not None})
+
+    def set_panel(self, slot_id: str, content: dict | None = None) -> dict:
+        """Idempotently set what ONE box holds — a kind transition is fine, the id never changes.
+
+        content=None (or {"kind": "empty"}) CLEARS the slot (the box stays and keeps its id). A
+        chart docked beside the box is its own box and is left alone. On a widget box every set is
+        refused (409). Answers {"status": "ok", "slot": {...}}.
+        """
+        return self._req("PUT", f"/app/panels/{self._seg(slot_id)}", {"content": content} if content is not None else {})
 
     def remove_panel(self, slot_id: str) -> dict:
         """Remove the slot entirely (its paired chart goes with it)."""
-        return self._req("DELETE", f"/app/panels/{slot_id}")
+        return self._req("DELETE", f"/app/panels/{self._seg(slot_id)}")
 
     # ── notifications & signals ──────────────────────────────────────────────
     def notify(self, message: str, severity: str = "info", source: str | None = None) -> dict:

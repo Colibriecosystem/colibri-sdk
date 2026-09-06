@@ -1,9 +1,17 @@
+using System.Text.Json.Serialization;
+
 namespace Colibri.Sdk;
 
 // Wire models for the Colibri Local API. Prices/sizes are decimal STRINGS (crypto tick precision).
 
 /// <summary><c>GET /ping</c> — liveness, versions, and the live bound port.</summary>
-public sealed record Ping(string Name, string Version, int ApiVersion, int Port);
+/// <summary>
+///     <c>GET /ping</c>. <c>ApiVersion</c> is what an UNVERSIONED request gets;
+///     <c>SupportedApiVersions</c> every response-shape version the <c>api-version</c> header may
+///     select (null on a terminal that predates versioning — read it as <c>[1]</c>). This SDK sends
+///     <see cref="ColibriClient.ApiVersion" />.
+/// </summary>
+public sealed record Ping(string Name, string Version, int ApiVersion, int Port, IReadOnlyList<int>? SupportedApiVersions = null);
 
 public sealed record BookLevel(string Price, string BaseQty, string UsdVolume);
 
@@ -108,46 +116,105 @@ public sealed record OrderbookSettings(
 /// <summary><c>GET/PATCH /exchanges/{exchange}/orderbook-settings</c> envelope.</summary>
 public sealed record OrderbookSettingsResponse(string Exchange, OrderbookSettings Settings);
 
-// ── Slot control (/app/panels) ────────────────────────────────────────────────
-// A SLOT is the durable box — addressed by its GUID SlotId, which survives an instrument change, a
-// clear, and a terminal restart. A PANEL is the content that fills it (an orderbook, optionally
-// paired with a chart). Copy ids in the terminal: the ⧉ control on a panel; right-click a tab
-// header → "Copy tab ID" for the POST add-target.
+// ── Slot control (/app/panels, api-version 2) ────────────────────────────────
+// A SLOT is the durable box — addressed by its GUID Id, which survives an instrument change, a
+// clear, a kind transition, and a terminal restart. A tab is ONE layout tree: a node is a SplitNode
+// (children side by side = "row", stacked = "column") or a SlotNode, and a leaf IS the slot. What
+// fills a slot is a union on `kind` carrying only the fields that mean something for that kind.
+// Copy ids in the terminal: the ⧉ control on a panel; right-click a tab header → "Copy tab ID".
+//
+// Polymorphism: the terminal writes the discriminator FIRST, which is what lets System.Text.Json
+// resolve these on net8 without AllowOutOfOrderMetadataProperties. Properties holding a leaf are
+// typed as the BASE (LayoutNode) — the discriminator is only honoured through it.
 
-/// <summary>The chart paired into a slot's column (content[1]).</summary>
-public sealed record PanelChart(string Exchange, string Symbol, string Interval, string ContentId);
+/// <summary>A layout node — <see cref="SplitNode" /> or <see cref="SlotNode" />; <c>Share</c> is its fraction of its parent, null on the root.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[JsonDerivedType(typeof(SplitNode), "split")]
+[JsonDerivedType(typeof(SlotNode), "slot")]
+public abstract record LayoutNode
+{
+    public double? Share { get; init; }
+}
 
-/// <summary>One slot. <c>SlotId</c> is the durable op key; <c>Kind</c> ∈ orderbook|chart|empty.</summary>
-public sealed record PanelSlot(
-    string SlotId,
-    string Kind,
-    bool Empty,
-    string? Exchange,
-    string? Symbol,
-    string? ContentId,
-    string? ConnectionId,
-    bool ViewOnly,
-    PanelChart? Chart);
+/// <summary>A split: <c>Orientation</c> ∈ <c>row</c> (children side by side) | <c>column</c> (stacked).</summary>
+public sealed record SplitNode(string Orientation, IReadOnlyList<LayoutNode> Children) : LayoutNode;
 
-/// <summary>One tab, keyed by its durable <c>Uuid</c> — the add target for POST /app/panels.</summary>
-public sealed record PanelTab(string Uuid, int Index, IReadOnlyList<PanelSlot> Slots);
+/// <summary>A slot — the durable box (<c>Id</c> is the op key for set / clear / remove) with what fills it.</summary>
+public sealed record SlotNode(string Id, SlotContent Content) : LayoutNode;
 
-/// <summary>One window, keyed by position (durable window ids are a later addition).</summary>
-public sealed record PanelWindow(int Index, IReadOnlyList<PanelTab> Tabs);
+/// <summary>What a slot holds — a union on <c>kind</c>. <c>ContentId</c> is UNIFORM across the filled kinds.</summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(EmptyContent), "empty")]
+[JsonDerivedType(typeof(OrderbookContent), "orderbook")]
+[JsonDerivedType(typeof(ChartContent), "chart")]
+[JsonDerivedType(typeof(WidgetContent), "widget")]
+public abstract record SlotContent;
+
+/// <summary>The "+" placeholder — a box you may fill.</summary>
+public sealed record EmptyContent : SlotContent;
+
+/// <summary>An orderbook. <c>ConnectionId</c> is present only when a trading account is bound; <c>ViewOnly</c> = no trading through this box.</summary>
+public sealed record OrderbookContent(string Exchange, string Symbol, string ContentId, bool ViewOnly, string? ConnectionId = null) : SlotContent;
+
+/// <summary>A candlestick chart; <c>Interval</c> is the timeframe (e.g. <c>M5</c>).</summary>
+public sealed record ChartContent(string Exchange, string Symbol, string Interval, string ContentId) : SlotContent;
+
+/// <summary>A widget box — visible here, never placed/changed/cleared through the API. <c>ContentId</c> is the widget's instance id.</summary>
+public sealed record WidgetContent(string WidgetId, string ContentId, string Name, bool Installed) : SlotContent;
+
+/// <summary>One tab, keyed by its durable <c>Id</c> (the add target). <c>Layout</c> is its whole tree; a single-box tab has a <see cref="SlotNode" /> root.</summary>
+public sealed record PanelTab(string Id, int Index, bool Active, string Title, LayoutNode? Layout);
+
+/// <summary>One window, keyed by position (0 = the main window; durable ids are a later addition).</summary>
+public sealed record PanelWindow(int Index, bool Active, IReadOnlyList<PanelTab> Tabs);
+
+/// <summary>The parent split of a slot: its axis, the slot's index among the siblings, how many there are.</summary>
+public sealed record SlotParent(string Orientation, int Index, int Count);
+
+/// <summary>Where one slot sits; <c>Parent</c> is null for a root slot (a single-box tab).</summary>
+public sealed record SlotPosition(int Window, string Tab, IReadOnlyList<int> Path, int Depth, SlotParent? Parent = null);
+
+/// <summary><c>GET /app/panels/{id}</c> — the slot (a <see cref="SlotNode" />, byte-identical to its tree leaf) plus where it sits.</summary>
+public sealed record SlotLookup(LayoutNode Slot, SlotPosition Position);
 
 /// <summary>
-///     The desired content of a slot: ONE instrument + the views that render it. <c>Views</c> ∈
-///     <c>["orderbook"]</c> | <c>["chart"]</c> (a standalone chart slot) | <c>["orderbook","chart"]</c>
-///     (the pair, same instrument, app-default timeframe). <c>ConnectionId</c> binds a trading account
-///     (grant-gated; requires the orderbook view); null = the app adopts the venue's default connection.
+///     One content to PLACE — the read side's union minus the ids the terminal mints. <c>Kind</c> ∈
+///     <c>orderbook</c> | <c>chart</c> (a widget is never placed); <c>Interval</c> for a chart;
+///     <c>ConnectionId</c> binds a trading account (grant-gated, orderbook only; null = the app adopts
+///     the venue's default connection); <c>Share</c> (0–1, exclusive) sizes the box within a stack.
+///     <c>Views</c> is the legacy one-instrument-plus-views form (still accepted) — leave it null
+///     when <c>Kind</c> is set.
 /// </summary>
-public sealed record PanelContent(string Exchange, string Symbol, IReadOnlyList<string> Views, string? ConnectionId = null);
+public sealed record PanelContent(
+    string Exchange,
+    string Symbol,
+    IReadOnlyList<string>? Views = null,
+    string? ConnectionId = null,
+    string? Kind = null,
+    string? Interval = null,
+    double? Share = null)
+{
+    /// <summary>A placeable orderbook.</summary>
+    public static PanelContent Orderbook(string exchange, string symbol, string? connectionId = null, double? share = null) =>
+        new(exchange, symbol, null, connectionId, "orderbook", null, share);
+
+    /// <summary>A placeable chart; <paramref name="interval" /> null = the app default.</summary>
+    public static PanelContent Chart(string exchange, string symbol, string? interval = null, double? share = null) =>
+        new(exchange, symbol, null, null, "chart", interval, share);
+}
+
+/// <summary>Where a stack lands: beside <c>SlotId</c> on <c>Side</c> (<c>left|right|top|bottom</c>) using <c>Action</c> (<c>pair|row|column|intoRow</c>; null = pair).</summary>
+public sealed record PanelTarget(string SlotId, string? Side = null, string? Action = null);
 
 /// <summary>One venue from <c>GET /exchanges</c> — <c>Id</c> is the string every exchange param accepts.</summary>
 public sealed record ExchangeInfo(string Id, string Name, string MarketType, bool Trading);
 
-/// <summary>Result of an add / set / remove — the status plus the affected slot.</summary>
-public sealed record PanelActionResult(string Status, PanelSlot? Panel);
+/// <summary>
+///     Result of an add / set / clear / remove — the affected box(es) in the tree's own leaf shape.
+///     <c>Slot</c> is the primary (first) box (a <see cref="SlotNode" />), <c>Slots</c> every box a
+///     stack add created, in request order.
+/// </summary>
+public sealed record SlotAction(string Status, LayoutNode? Slot = null, IReadOnlyList<LayoutNode>? Slots = null);
 
 /// <summary>
 ///     Place an order (<c>POST /connections/{id}/orders</c>). The connection — and therefore the

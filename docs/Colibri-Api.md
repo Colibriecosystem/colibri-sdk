@@ -82,7 +82,7 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/ping` | `{name, version, apiVersion, port}` — liveness + the live bound port |
+| GET | `/ping` | `{name, version, apiVersion, port, supportedApiVersions}` — liveness + the live bound port + the response-shape versions the `api-version` header may select |
 | GET | `/exchanges` | the venue catalog — `id` is the string every `{exchange}` accepts; `trading:false` = view-only venue |
 | GET | `/exchanges/{exchange}/symbols` | the venue's symbol universe + metadata |
 | GET | `/markets/{exchange}/{symbol}/book` | `?depth=` (1–500). Dual-unit book snapshot |
@@ -98,9 +98,10 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
 | DELETE | `/orders` | cancel every order on EVERY granted account → `202 {status, accounts}` |
 | DELETE | `/positions` | close every position on EVERY granted account → `202 {status, accounts}` |
-| GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → slot tree |
-| POST | `/app/panels` | `{tabId?, content?, activate?}` → `201` — add a panel (null content = empty "+" box; `activate` surfaces the window — the open-symbol gesture) |
-| PUT | `/app/panels/{slotId}` | `{content?}` — idempotent desired-state set (kind transitions ok; null content = clear, box keeps its id) |
+| GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → **layout tree** (`api-version: 2`; unversioned = the v1 flat `slots`, until 1.3.0) |
+| GET | `/app/panels/{slotId}` | one slot — byte-identical to its tree leaf — plus `position` (`window`, `tab`, `path`, `depth`, `parent?`) |
+| POST | `/app/panels` | `{tabId?, contents? \| content?, target?, orientation?, activate?}` → `201 {status, slot, slots?}` — a STACK of boxes (each its own box, ≤16, positioned beside a slot) or ONE box; `{kind:"empty"}` / no content = a bare "+" box; `activate` surfaces the window |
+| PUT | `/app/panels/{slotId}` | `{content: {kind, …}}` — idempotent set of THIS box (kind transitions ok, id stable; `{kind:"empty"}` / no content = clear; a widget box → `409`) |
 | DELETE | `/app/panels/{slotId}` | remove the slot (its paired chart goes with it) |
 | POST | `/app/combos` | `{symbol, target?}` → `201` — fan across every connection (`target`: `tab`\|`window`) |
 | POST | `/notifications` | `{message, severity?, source?}` — raise a toast |
@@ -117,12 +118,28 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 tied to a connection.
 
 **Panel control:** a **slot** is the durable box in the terminal's grid — its GUID `slotId` survives
-an instrument change, a clear, a view/kind transition, and a terminal restart. A **panel** is the
+an instrument change, a clear, a kind transition, and a terminal restart. A **panel** is the
 content that fills it. Copy ids in the terminal: the **⧉ Copy ID** control on a panel (top-right on
 an empty box) for a slot; **right-click a tab header → Copy tab ID** for the `POST` add-target.
-`content` = ONE instrument + the views that render it (`{connectionId?, exchange, symbol, views}`,
-`views` ⊆ `["orderbook","chart"]`). Omitted `connectionId` = the app adopts the venue's default
-connection by itself (no grant needed — the app picks, not the API).
+
+**Response shapes are versioned per request** by the `api-version` header. `2` (what every SDK here
+sends) answers ONE layout tree per tab —
+`{windows:[{index, active, tabs:[{id, index, active, title, layout}]}]}` where a node is
+`{type:"split", orientation:"row"|"column", share?, children}` or `{type:"slot", id, share?, content}`
+(`share` = the node's fraction of its parent, absent on the root) and `content` is a union on `kind`
+carrying only its own fields, never `null`: `{kind:"empty"}` ·
+`{kind:"orderbook", exchange, symbol, contentId, connectionId?, viewOnly}` ·
+`{kind:"chart", exchange, symbol, interval, contentId}` · `{kind:"widget", widgetId, contentId, name,
+installed}`. `contentId` is uniform (a widget's instance id lands there); it is the identity of the
+CONTENT and changes on a re-pick, unlike the slot `id`. An absent header answers the older flat
+`slots` shape (kept until terminal **1.3.0**, when v1 is removed and the header ignored); a value the
+terminal cannot read is refused `400 unsupported_api_version`, never silently served v1. `GET /ping`
+lists `supportedApiVersions`. Request bodies are NOT versioned: a placeable content is the read
+side's union minus the minted ids — `{kind:"orderbook", exchange, symbol, connectionId?, share?}` /
+`{kind:"chart", exchange, symbol, interval?, share?}` — and the legacy `{exchange, symbol, views}`
+form is still accepted. A widget is never placed (`400`); a widget box refuses every set (`409
+slot_occupied_by_widget`). Omitted `connectionId` = the app adopts the venue's default connection by
+itself (no grant needed — the app picks, not the API).
 
 ## Parameter reference
 
@@ -130,7 +147,11 @@ connection by itself (no grant needed — the app picks, not the API).
 |---|---|---|---|
 | `exchange` | market data, signals, panels `content`, signal levels | string — an `id` from **`GET /exchanges`** (e.g. `BinanceSpot`, `BinanceLinearFutures`, `BybitLinearPerpetual`) | Enum names, case-insensitive on parse; a venue with `trading: false` is view-only. Trading routes need NO exchange — the connection determines it |
 | `symbol` | same | string, the venue's wire symbol (`BTCUSDT`; quote-first venues keep their native form, e.g. UpBit `KRW-BTC`) | From `GET /exchanges/{exchange}/symbols` |
-| `views` | panels `content` | array — `"orderbook"`, `"chart"` (dedup, ≥1) | `["chart"]` = a standalone chart slot; both = the pair (chart stacked under the orderbook, same instrument, app-default timeframe) |
+| `api-version` | request HEADER, `/app/panels*` | `1` \| `2`; absent = `1` | Selects the response shape (see **Panel control**); anything else → `400 unsupported_api_version`. Ignored from terminal 1.3.0 (v2 only) |
+| `kind` | panels `content` / `contents[]` | `orderbook` \| `chart` (`empty` = clear / a bare box) | A widget is never placed through the API (`400`) |
+| `contents` | `POST /app/panels` | array of placeable contents, ≤16, in order | Each item its own box; `share` (0–1) sizes it within the stack; `target: {slotId, side?, action?}` positions the stack beside a slot (`left\|right\|top\|bottom` × `pair\|row\|column\|intoRow`), `orientation: row\|column` stacks the items |
+| `interval` | chart contents | string, e.g. `M1`, `M5`, `M15` | Omitted = the app default |
+| `views` | panels `content` (legacy form) | array — `"orderbook"`, `"chart"` (dedup, ≥1) | `["chart"]` = a standalone chart slot; both = the pair (chart stacked under the orderbook, same instrument, app-default timeframe). Prefer `kind` |
 | `connectionId` | trading URLs, panels `content` | string — an `id` from `GET /connections` | Trading + panel binding are **grant-gated** (Settings → Program → Local API). Panels: requires the orderbook view; omitted = the app adopts the venue's default connection |
 | `tabId` | `POST /app/panels`, `GET ?tabId=` | GUID ("N" form) — a tab's durable id | Copy: right-click a tab header → **Copy tab ID** |
 | `slotId` | `/app/panels/{slotId}` | GUID ("N" form) — the durable box handle | Copy: the ⧉ control on a panel; survives change / clear / restart |

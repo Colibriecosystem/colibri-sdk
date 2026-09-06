@@ -4,11 +4,25 @@
 export interface Ping {
   name: string;
   version: string;
-  /** The Local API protocol version (currently 1). */
+  /** The Local API protocol version (currently 1) — what an UNVERSIONED request gets. */
   apiVersion: number;
   /** The live bound port (useful when the preferred port was taken). */
   port: number;
+  /**
+   * Every response-shape version the `api-version` header may select (absent on a terminal that
+   * predates versioning — read that as `[1]`). This SDK sends {@link API_VERSION}.
+   */
+  supportedApiVersions?: number[];
 }
+
+/**
+ * The response-shape version this SDK is written against, sent as the `api-version` header on
+ * every call. Today only the `/app/panels` family has two shapes; every other route ignores it. A
+ * terminal that predates v2 ignores the header and answers v1 — so this SDK needs a terminal that
+ * serves v2 (check `supportedApiVersions` on `/ping`). From terminal 1.3.0 v1 is removed and the
+ * header is ignored.
+ */
+export const API_VERSION = 2;
 
 export interface BookLevel {
   price: string;
@@ -195,53 +209,126 @@ export interface OrderbookSettings {
   ocoStopLossPercent?: string | null;
 }
 
-// ── Slot control (/app/panels) ────────────────────────────────────────────────
-// A SLOT is the durable box — addressed by its GUID `slotId`, which survives an instrument change,
-// a clear, and a terminal restart. A PANEL is the content that fills it (an orderbook, optionally
-// paired with a chart). Copy an id from the terminal: the ⧉ control on a panel, or right-click a
-// tab header → "Copy tab ID" for the POST add-target.
+// ── Slot control (/app/panels, api-version 2) ────────────────────────────────
+// A SLOT is the durable box — addressed by its GUID `id`, which survives an instrument change, a
+// clear, a kind transition, and a terminal restart. A tab is ONE layout tree: a node is a `split`
+// (children side by side = `row`, stacked = `column`) or a `slot`, and a leaf IS the slot. What
+// fills a slot is a union on `kind` carrying only the fields that mean something for that kind.
+// Copy an id from the terminal: the ⧉ control on a panel, or right-click a tab header → "Copy tab
+// ID" for the POST add-target.
 
-/** The chart paired into a slot's column (content[1]). */
-export interface PanelChart {
+/** A split: children laid out side by side (`row`) or stacked (`column`). */
+export interface SplitNode {
+  type: "split";
+  orientation: "row" | "column";
+  /** This node's fraction of its parent; absent on the tab root (which has no parent). */
+  share?: number;
+  children: LayoutNode[];
+}
+
+/** A slot — the durable box (`id` is the op key for set / clear / remove) with what fills it. */
+export interface SlotNode {
+  type: "slot";
+  id: string;
+  /** This node's fraction of its parent; absent on a root slot and on action responses. */
+  share?: number;
+  content: SlotContent;
+}
+
+export type LayoutNode = SplitNode | SlotNode;
+
+/** The "+" placeholder — a box you may fill. */
+export interface EmptyContent {
+  kind: "empty";
+}
+
+export interface OrderbookContent {
+  kind: "orderbook";
   exchange: string;
   symbol: string;
+  /** The per-instrument panel id — changes on a re-pick, unlike the slot `id`. */
+  contentId: string;
+  /** The bound trading account — present only when one is bound. */
+  connectionId?: string;
+  /** true = no trading through this box (no account, or trading disabled on it). */
+  viewOnly: boolean;
+}
+
+export interface ChartContent {
+  kind: "chart";
+  exchange: string;
+  symbol: string;
+  /** The chart timeframe (e.g. `M1`, `M5`). */
   interval: string;
   contentId: string;
 }
 
-/** One slot in the tree. `slotId` is the durable op key; `contentId` is the per-instrument id. */
-export interface PanelSlot {
-  slotId: string;
-  kind: "orderbook" | "chart" | "empty";
-  empty: boolean;
-  exchange: string | null;
-  symbol: string | null;
-  contentId: string | null;
-  /** The bound trading account; null = view-only. */
-  connectionId: string | null;
-  viewOnly: boolean;
-  chart: PanelChart | null;
+/** A widget box. The API can SEE one; it never starts or stops one (every write to it is `409`). */
+export interface WidgetContent {
+  kind: "widget";
+  widgetId: string;
+  /** The widget instance id — the same value that widget's own handshake carries. */
+  contentId: string;
+  name: string;
+  /** false = the not-installed / revoked placeholder that still holds the box. */
+  installed: boolean;
 }
 
-/** One tab, keyed by its durable `uuid` — the add target for POST /app/panels. */
+/** What a slot holds — discriminated on `kind`. `contentId` is UNIFORM across the filled kinds. */
+export type SlotContent = EmptyContent | OrderbookContent | ChartContent | WidgetContent;
+
+/** One tab, keyed by its durable `id` — the `tabId` an add targets. */
 export interface PanelTab {
-  uuid: string;
+  id: string;
+  /** Positional index within the window. */
   index: number;
-  slots: PanelSlot[];
+  /** Whether this is the tab its window shows. */
+  active: boolean;
+  /** The header label as rendered (the custom name, else the automatic coin + count). */
+  title: string;
+  /** The whole layout tree; a single-box tab has a `SlotNode` root. Null for a never-laid-out tab. */
+  layout: LayoutNode | null;
 }
 
 /** One window, keyed by position (durable window ids are a later addition). */
 export interface PanelWindow {
+  /** 0 = the main window. */
   index: number;
+  /** Whether this is the OS-active window. */
+  active: boolean;
   tabs: PanelTab[];
 }
 
+/** Where one slot sits, relative to its tab's root. */
+export interface SlotPosition {
+  window: number;
+  /** The tab's durable id. */
+  tab: string;
+  /** The index chain from the tab root; empty for a root slot. */
+  path: number[];
+  depth: number;
+  /** The parent split; absent for a root slot (a single-box tab). */
+  parent?: { orientation: "row" | "column"; index: number; count: number };
+}
+
+/** `GET /app/panels/{id}` — the slot exactly as its leaf in the tree, plus where it sits. */
+export interface SlotLookup {
+  slot: SlotNode;
+  position: SlotPosition;
+}
+
 /**
- * The desired content of a slot: ONE instrument + the views that render it.
- * `views`: `["orderbook"]`, `["chart"]` (a standalone chart slot), or `["orderbook","chart"]`
- * (the pair — chart stacked under the orderbook, same instrument, app-default timeframe).
- * `connectionId` binds a trading account (grant-gated; requires the orderbook view); omitted =
- * the app adopts the venue's default connection by itself.
+ * One content to place — the read side's union minus the ids the terminal mints. A widget is
+ * never placed through the API. `share` (0–1, exclusive) sizes the box within a stack.
+ */
+export type PlaceableContent =
+  | { kind: "orderbook"; exchange: string; symbol: string; connectionId?: string; share?: number }
+  | { kind: "chart"; exchange: string; symbol: string; interval?: string; share?: number };
+
+/**
+ * The legacy one-instrument-plus-`views` form (still accepted): `views` is `["orderbook"]`,
+ * `["chart"]`, or `["orderbook","chart"]` (the pair — chart stacked under the orderbook, same
+ * instrument, app-default timeframe). Prefer {@link PlaceableContent}.
  */
 export interface PanelContent {
   connectionId?: string;
@@ -250,6 +337,42 @@ export interface PanelContent {
   views: ("orderbook" | "chart")[];
 }
 
+/** Where a stack lands: beside `slotId` on `side`, using the drag-drop `action` vocabulary (default `pair`). */
+export interface PanelTarget {
+  slotId: string;
+  side?: "left" | "right" | "top" | "bottom";
+  action?: "pair" | "row" | "column" | "intoRow";
+}
+
+/** `POST /app/panels` — an ordered STACK of boxes (`contents`), or the legacy single `content`. */
+export interface AddPanelsBody {
+  /** Target tab (durable id); omitted = the ACTIVE tab. */
+  tabId?: string;
+  /** Each item its own box, in order (at most 16). Mutually exclusive with `content`. */
+  contents?: PlaceableContent[];
+  /** Where the stack lands; omitted = appended to the tab's root row. */
+  target?: PanelTarget;
+  /** How the items stack relative to each other (default `column`). */
+  orientation?: "row" | "column";
+  /** ONE content (`PlaceableContent`, `{kind:"empty"}` = a bare "+" box) or the legacy `views` form. */
+  content?: PlaceableContent | EmptyContent | PanelContent | null;
+  /** Surface the terminal window afterwards (default false so a background tool never steals focus). */
+  activate?: boolean;
+}
+
+/** Result of an add / set / clear / remove — the affected box(es) in the tree's own leaf shape. */
+export interface SlotAction {
+  /** `added` (POST) / `ok` (PUT) / `removed` (DELETE). */
+  status: string;
+  /** The primary (first) box. */
+  slot?: SlotNode;
+  /** Every box a stack add created, in request order. */
+  slots?: SlotNode[];
+}
+
+/** @deprecated Use {@link SlotAction} — the v1 name, kept as an alias for one release. */
+export type PanelActionResult = SlotAction;
+
 /** One venue from GET /exchanges — `id` is the string every `exchange` param accepts. */
 export interface ExchangeInfo {
   id: string;
@@ -257,12 +380,6 @@ export interface ExchangeInfo {
   marketType: string;
   /** false = market-data-only venue (no trading surface). */
   trading: boolean;
-}
-
-/** Result of an add / set / remove — the status plus the affected slot. */
-export interface PanelActionResult {
-  status: string;
-  panel: PanelSlot | null;
 }
 
 /** Live WebSocket channels on `/stream`. */

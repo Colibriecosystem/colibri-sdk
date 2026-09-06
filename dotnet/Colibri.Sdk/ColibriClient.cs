@@ -26,6 +26,15 @@ public sealed class ColibriClient : IDisposable
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
 
+    /// <summary>
+    ///     The response-shape version this SDK is written against, sent as the <c>api-version</c>
+    ///     header on every call. Today only the <c>/app/panels</c> family has two shapes; every other
+    ///     route ignores it. A terminal that predates v2 ignores the header and answers v1 — so this
+    ///     SDK needs a terminal that serves v2 (check <see cref="Ping.SupportedApiVersions" />).
+    ///     From terminal 1.3.0 v1 is removed and the header is ignored.
+    /// </summary>
+    public const int ApiVersion = 2;
+
     /// <param name="token">
     ///     Only needed to place or cancel orders. Omit it for a read-only client and no
     ///     <c>Authorization</c> header is sent at all (a bare "Bearer " would be malformed).
@@ -33,6 +42,7 @@ public sealed class ColibriClient : IDisposable
     public ColibriClient(int port, string? token = null, string host = "127.0.0.1")
     {
         _http = new HttpClient { BaseAddress = new Uri($"http://{host}:{port}") };
+        _http.DefaultRequestHeaders.Add("api-version", ApiVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (!string.IsNullOrEmpty(token))
         {
             _http.DefaultRequestHeaders.Authorization = new("Bearer", token);
@@ -183,12 +193,14 @@ public sealed class ColibriClient : IDisposable
     public Task<SweepResult> CloseAllPositionsAsync(CancellationToken ct = default) =>
         SendAsync<SweepResult>(HttpMethod.Delete, "/positions", null, ct);
 
-    // ── panel control (/app/panels) ──────────────────────────────────────────
-    // A SLOT is the durable box — its GUID slotId survives an instrument change, a clear, and a
-    // terminal restart. Add/change/clear are token-gated; a connectionId binds a trading account
-    // and needs a per-connection GRANT (like trading).
+    // ── panel control (/app/panels, api-version 2) ───────────────────────────
+    // A SLOT is the durable box — its GUID Id survives an instrument change, a clear, a kind
+    // transition, and a terminal restart, so a tool can drive the same box forever. A tab is ONE
+    // layout tree where a leaf IS the slot. Add/change/clear are token-gated; a ConnectionId in a
+    // body binds a trading account and needs a per-connection GRANT. A widget box is visible here
+    // but never placed, changed or cleared through the API (409).
 
-    /// <summary>The window → tab → slot tree; scope with <paramref name="tabId" /> (durable) / <paramref name="windowIndex" /> (positional).</summary>
+    /// <summary>The window → tab → layout tree; scope with <paramref name="tabId" /> (durable) / <paramref name="windowIndex" /> (positional).</summary>
     public async Task<IReadOnlyList<PanelWindow>> PanelsAsync(string? tabId = null, int? windowIndex = null, CancellationToken ct = default)
     {
         var q = new List<string>(2);
@@ -206,27 +218,41 @@ public sealed class ColibriClient : IDisposable
         return (await GetAsync<PanelsResponse>($"/app/panels{qs}", ct).ConfigureAwait(false)).Windows;
     }
 
+    /// <summary>One slot — byte-identical to its leaf in the tree — plus where it sits (parent split, path, depth).</summary>
+    public Task<SlotLookup> PanelAsync(string slotId, CancellationToken ct = default) =>
+        GetAsync<SlotLookup>($"/app/panels/{E(slotId)}", ct);
+
     /// <summary>
-    ///     Add a panel to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click a
-    ///     tab header to copy its id). A null <paramref name="content" /> adds an empty "+" box
-    ///     instead — reserve now, fill later by its durable id via <see cref="SetPanelAsync" />.
+    ///     Add ONE box to a tab (the ACTIVE tab when <paramref name="tabId" /> is null — right-click
+    ///     a tab header to copy its id). A null <paramref name="content" /> adds an empty "+" box —
+    ///     reserve now, fill later by its durable id via <see cref="SetPanelAsync" />.
     ///     <paramref name="activate" /> surfaces the terminal window afterwards (default false so a
     ///     background layout tool never steals focus).
     /// </summary>
-    public Task<PanelActionResult> AddPanelAsync(PanelContent? content = null, string? tabId = null, bool activate = false, CancellationToken ct = default) =>
-        SendAsync<PanelActionResult>(HttpMethod.Post, "/app/panels", new { tabId, content, activate }, ct);
+    public Task<SlotAction> AddPanelAsync(PanelContent? content = null, string? tabId = null, bool activate = false, CancellationToken ct = default) =>
+        SendAsync<SlotAction>(HttpMethod.Post, "/app/panels", new { tabId, content, activate }, ct);
 
     /// <summary>
-    ///     Idempotently set a slot's desired state — instrument, views (kind transitions ok: an
-    ///     orderbook box can become a chart box and back, the id never changes), account. A null
-    ///     <paramref name="content" /> CLEARS the slot (the box stays and keeps its id).
+    ///     Add an ordered STACK of boxes (each item its own box, at most 16), optionally positioned by
+    ///     <paramref name="target" /> (beside an existing slot — the drag-drop vocabulary; null =
+    ///     appended to the tab's root row) and stacked per <paramref name="orientation" />
+    ///     (<c>row</c> | <c>column</c>, null = column). <c>Slots</c> on the result is every box, in order.
     /// </summary>
-    public Task<PanelActionResult> SetPanelAsync(string slotId, PanelContent? content = null, CancellationToken ct = default) =>
-        SendAsync<PanelActionResult>(HttpMethod.Put, $"/app/panels/{E(slotId)}", new { content }, ct);
+    public Task<SlotAction> AddPanelsAsync(IReadOnlyList<PanelContent> contents, string? tabId = null, PanelTarget? target = null, string? orientation = null, bool activate = false, CancellationToken ct = default) =>
+        SendAsync<SlotAction>(HttpMethod.Post, "/app/panels", new { tabId, contents, target, orientation, activate }, ct);
+
+    /// <summary>
+    ///     Idempotently set what ONE box holds — a kind transition is fine, the id never changes; a
+    ///     chart docked beside the box is its own box and is left alone. A null
+    ///     <paramref name="content" /> CLEARS the slot (the box stays and keeps its id). On a widget
+    ///     box every set is refused (409).
+    /// </summary>
+    public Task<SlotAction> SetPanelAsync(string slotId, PanelContent? content = null, CancellationToken ct = default) =>
+        SendAsync<SlotAction>(HttpMethod.Put, $"/app/panels/{E(slotId)}", new { content }, ct);
 
     /// <summary>Remove the slot entirely (its paired chart goes with it).</summary>
-    public Task<PanelActionResult> RemovePanelAsync(string slotId, CancellationToken ct = default) =>
-        SendAsync<PanelActionResult>(HttpMethod.Delete, $"/app/panels/{E(slotId)}", null, ct);
+    public Task<SlotAction> RemovePanelAsync(string slotId, CancellationToken ct = default) =>
+        SendAsync<SlotAction>(HttpMethod.Delete, $"/app/panels/{E(slotId)}", null, ct);
 
     // ── app bridge / signals ─────────────────────────────────────────────────
     /// <summary>
@@ -235,7 +261,7 @@ public sealed class ColibriClient : IDisposable
     ///     <paramref name="connectionId" /> is grant-gated; <paramref name="views" /> defaults to
     ///     <c>["orderbook"]</c>.
     /// </summary>
-    public Task<PanelActionResult> OpenSymbolAsync(string exchange, string symbol, string? connectionId = null, IReadOnlyList<string>? views = null, CancellationToken ct = default) =>
+    public Task<SlotAction> OpenSymbolAsync(string exchange, string symbol, string? connectionId = null, IReadOnlyList<string>? views = null, CancellationToken ct = default) =>
         AddPanelAsync(new PanelContent(exchange, symbol, views ?? ["orderbook"], connectionId), activate: true, ct: ct);
 
     /// <summary>POST /app/combos — fan the coin across every connection that lists it. <paramref name="target" />: "tab" | "window".</summary>
