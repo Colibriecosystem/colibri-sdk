@@ -132,7 +132,9 @@ carrying only its own fields, never `null`: `{kind:"empty"}` ·
 `{kind:"chart", exchange, symbol, interval, contentId}` · `{kind:"widget", widgetId, contentId, name,
 installed}`. `contentId` is uniform (a widget's instance id lands there); it is the identity of the
 CONTENT and changes on a re-pick, unlike the slot `id`. An absent header answers the older flat
-`slots` shape (kept until terminal **1.3.0**, when v1 is removed and the header ignored); a value the
+`slots` shape exactly as it shipped — a paired chart nested in its orderbook's `chart`, no tree, no
+`path`, a widget box carrying only `kind:"widget"` (kept until terminal **1.3.0**, when v1 is removed
+and the header ignored); a value the
 terminal cannot read is refused `400 unsupported_api_version`, never silently served v1. `GET /ping`
 lists `supportedApiVersions`. Request bodies are NOT versioned: a placeable content is the read
 side's union minus the minted ids — `{kind:"orderbook", exchange, symbol, connectionId?, share?}` /
