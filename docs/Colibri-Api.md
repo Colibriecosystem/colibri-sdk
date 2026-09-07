@@ -98,7 +98,7 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
 | DELETE | `/orders` | cancel every order on EVERY granted account → `202 {status, accounts}` |
 | DELETE | `/positions` | close every position on EVERY granted account → `202 {status, accounts}` |
-| GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → **layout tree** (`api-version: 2`; unversioned = the v1 flat `slots`, until 1.3.0) |
+| GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → **layout tree** (`api-version: 2`; unversioned = the v1 flat `slots`, until 1.4.0) |
 | GET | `/app/panels/{slotId}` | one slot — byte-identical to its tree leaf — plus `position` (`window`, `tab`, `path`, `depth`, `parent?`) |
 | POST | `/app/panels` | `{tabId?, contents? \| content?, target?, orientation?, activate?}` → `201 {status, slot, slots?}` — a STACK of boxes (each its own box, ≤16, positioned beside a slot) or ONE box; `{kind:"empty"}` / no content = a bare "+" box; `activate` surfaces the window |
 | PUT | `/app/panels/{slotId}` | `{content: {kind, …}}` — idempotent set of THIS box (kind transitions ok, id stable; `{kind:"empty"}` / no content = clear; a widget box → `409`) |
@@ -133,7 +133,7 @@ carrying only its own fields, never `null`: `{kind:"empty"}` ·
 installed}`. `contentId` is uniform (a widget's instance id lands there); it is the identity of the
 CONTENT and changes on a re-pick, unlike the slot `id`. An absent header answers the older flat
 `slots` shape exactly as it shipped — a paired chart nested in its orderbook's `chart`, no tree, no
-`path`, a widget box carrying only `kind:"widget"` (kept until terminal **1.3.0**, when v1 is removed
+`path`, a widget box carrying only `kind:"widget"` (kept until terminal **1.4.0**, when v1 is removed
 and the header ignored); a value the
 terminal cannot read is refused `400 unsupported_api_version`, never silently served v1. `GET /ping`
 lists `supportedApiVersions`. Request bodies are NOT versioned: a placeable content is the read
@@ -149,7 +149,7 @@ itself (no grant needed — the app picks, not the API).
 |---|---|---|---|
 | `exchange` | market data, signals, panels `content`, signal levels | string — an `id` from **`GET /exchanges`** (e.g. `BinanceSpot`, `BinanceLinearFutures`, `BybitLinearPerpetual`) | Enum names, case-insensitive on parse; a venue with `trading: false` is view-only. Trading routes need NO exchange — the connection determines it |
 | `symbol` | same | string, the venue's wire symbol (`BTCUSDT`; quote-first venues keep their native form, e.g. UpBit `KRW-BTC`) | From `GET /exchanges/{exchange}/symbols` |
-| `api-version` | request HEADER, `/app/panels*` | `1` \| `2`; absent = `1` | Selects the response shape (see **Panel control**); anything else → `400 unsupported_api_version`. Ignored from terminal 1.3.0 (v2 only) |
+| `api-version` | request HEADER, `/app/panels*` | `1` \| `2`; absent = `1` | Selects the response shape (see **Panel control**); anything else → `400 unsupported_api_version`. Ignored from terminal 1.4.0 (v2 only) |
 | `kind` | panels `content` / `contents[]` | `orderbook` \| `chart` (`empty` = clear / a bare box) | A widget is never placed through the API (`400`) |
 | `contents` | `POST /app/panels` | array of placeable contents, ≤16, in order | Each item its own box; `share` (0–1) sizes it within the stack; `target: {slotId, side?, action?}` positions the stack beside a slot (`left\|right\|top\|bottom` × `pair\|row\|column\|intoRow`), `orientation: row\|column` stacks the items |
 | `interval` | chart contents | string, e.g. `M1`, `M5`, `M15` | Omitted = the app default |

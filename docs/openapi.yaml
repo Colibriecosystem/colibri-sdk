@@ -154,7 +154,7 @@ tags:
       ONE layout tree per tab (`PanelsV2Response` — a node is a `split`, a `row`/`column` of
       children, or a `slot`; a leaf IS the slot; `content` is a union on `kind` carrying only its
       own fields, never `null`). An absent header answers the legacy pre-versioning shape (the flat
-      `slots` list that shipped before 2026-09-06, frozen, removed in terminal **1.3.0** — not
+      `slots` list that shipped before 2026-09-06, frozen, removed in terminal **1.4.0** — not
       documented here; see `Colibri-Api.md` for the one paragraph it needs). A value the terminal
       cannot read is refused `400 unsupported_api_version`, never silently served the legacy
       shape. Request bodies are NOT versioned. `GET /ping` lists `supportedApiVersions`.
@@ -1078,7 +1078,7 @@ components:
       description: >-
         The response-shape version the caller reads. This reference documents `2` — the layout-tree
         shapes — and every SDK sends it. Omitting the header answers the legacy pre-versioning shape
-        (frozen, removed in terminal 1.3.0, after which the header is ignored); anything the
+        (frozen, removed in terminal 1.4.0, after which the header is ignored); anything the
         terminal cannot read as a plain positive integer, or a version it does not serve, is refused
         `400 unsupported_api_version` — never silently served the legacy shape.
       schema:

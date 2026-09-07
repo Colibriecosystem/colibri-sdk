@@ -21,7 +21,7 @@ class ColibriError(Exception):
 # The response-shape version this SDK is written against, sent as the ``api-version`` header on
 # every call. Today only the ``/app/panels`` family has two shapes; every other route ignores it. A
 # terminal that predates v2 ignores the header and answers v1 — so this SDK needs a terminal that
-# serves v2 (check ``supportedApiVersions`` on ``/ping``). From terminal 1.3.0 v1 is removed and the
+# serves v2 (check ``supportedApiVersions`` on ``/ping``). From terminal 1.4.0 v1 is removed and the
 # header is ignored.
 API_VERSION = 2
 
