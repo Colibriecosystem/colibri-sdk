@@ -84,7 +84,7 @@ signal, manage price-alert signal levels (incl. the triggered-lifecycle sweep). 
 an instrument change, a clear, a kind transition, and restart): add one box or a positioned STACK,
 change / clear / remove, bind a granted trading account, ask where a slot sits. Every SDK here
 sends `api-version: 2`; an unversioned request still gets the older flat shape until terminal
-1.3.0 removes it. Stream: `book`, `trades`, `funding`,
+1.4.0 removes it. Stream: `book`, `trades`, `funding`,
 `positions`, `orders`, `balance`, `notifications`, `signalLevels`.
 
 See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract.

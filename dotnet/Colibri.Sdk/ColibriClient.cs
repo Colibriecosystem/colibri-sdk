@@ -31,7 +31,7 @@ public sealed class ColibriClient : IDisposable
     ///     header on every call. Today only the <c>/app/panels</c> family has two shapes; every other
     ///     route ignores it. A terminal that predates v2 ignores the header and answers v1 — so this
     ///     SDK needs a terminal that serves v2 (check <see cref="Ping.SupportedApiVersions" />).
-    ///     From terminal 1.3.0 v1 is removed and the header is ignored.
+    ///     From terminal 1.4.0 v1 is removed and the header is ignored.
     /// </summary>
     public const int ApiVersion = 2;
 
