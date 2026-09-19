@@ -1,7 +1,8 @@
 openapi: 3.1.0
 info:
   title: Colibri Local API
-  version: "1.1.0"
+  version: "1.2.0"
+  x-terminal-version: "unstamped"
   summary: Loopback HTTP + WebSocket API of the Colibri scalping terminal.
   description: |
     The Colibri Local API lets an external **widget, screener, or bot** read the order book, stream
@@ -143,7 +144,12 @@ tags:
       Place / cancel / close — the ONLY token-gated operations, and grant-gated per connection on
       top. Every accepted mutation answers 202 (enqueued); confirmation arrives on the WebSocket
       `orders` channel.
+  - name: Workspace
+    description: >-
+      The terminal's windows, its tabs, the boxes docked inside a tab, and the chart windows that
+      float beside them. Supersedes Panels; carries no api-version, because every route in it is new.
   - name: Panels
+    x-deprecated: true
     description: >-
       Slot control — enumerate and drive the terminal's panels by a durable slot id. A SLOT is the
       durable box (its GUID survives an instrument change, a clear, a kind transition, and a
@@ -158,14 +164,58 @@ tags:
       documented here; see `Colibri-Api.md` for the one paragraph it needs). A value the terminal
       cannot read is refused `400 unsupported_api_version`, never silently served the legacy
       shape. Request bodies are NOT versioned. `GET /ping` lists `supportedApiVersions`.
-  - name: App
-    description: Other terminal gestures — combos.
   - name: Notifications & signals
     description: Raise a toast or a market signal inside the terminal.
   - name: Signal levels
     description: API-owned price alerts, drawn on the ladder and fired on price crossings.
 
 paths:
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSchema
+      tags: [Discovery]
+      summary: This API's own contract, from the running terminal
+      description: >-
+        The schema for EXACTLY this build, served out of the binary answering the request. Every
+        other copy — the SDK repo's, the docs site's, a checkout — describes whichever build it was
+        taken from, and a reader cannot tell which; pointing a tool at a live port removes the
+        ambiguity. Served regardless of the browser-access toggle: it is a public contract carrying
+        no token, no account and no credential, and anyone who can reach the port can already
+        enumerate the routes by trying them. Also answers at `/docs/openapi.yaml`.
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+        "404":
+          description: This build carries no embedded schema.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /asyncapi.yaml:
+    get:
+      operationId: getAsyncApiSchema
+      tags: [Discovery]
+      summary: The /stream socket's contract, from the running terminal
+      description: The AsyncAPI companion to `/openapi.yaml`. Also answers at `/docs/asyncapi.yaml`.
+      security: []
+      responses:
+        "200":
+          description: The AsyncAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+        "404":
+          description: This build carries no embedded schema.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /ping:
     get:
       operationId: ping
@@ -238,12 +288,20 @@ paths:
         - name: depth
           in: query
           required: false
-          description: "Max levels per side (clamped to 1–500; default 50)."
+          description: >-
+            Max levels per side: 1–1000 (default 50), or the literal `full`. `full` is capped at
+            **5000 per side** — a Coinbase spot book runs to ~40k levels, and an uncapped reply on a
+            loopback socket is a footgun — and the response then carries `truncated: true`. A
+            numeric depth that trims does NOT set that flag: it withheld nothing the caller did not
+            ask to have trimmed.
           schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 50
+            oneOf:
+              - type: integer
+                minimum: 1
+                maximum: 1000
+                default: 50
+              - type: string
+                const: full
       responses:
         "200":
           description: The book snapshot.
@@ -644,9 +702,490 @@ paths:
         "403":
           $ref: "#/components/responses/TradingNotEnabled"
 
+  /connections/{id}/trades:
+    get:
+      operationId: listTrades
+      tags: [Connections]
+      summary: Closed-trade history, newest close first
+      description: >-
+        The terminal's OWN record of this account's closed trades — it exists nowhere else, which is
+        why this read is account data rather than market data. `fromMs`/`toMs` bound the CLOSE time
+        and are half-open `[fromMs, toMs)`, so consecutive windows tile without double-counting the
+        row on the seam; an unparseable value reads as "not supplied" rather than erroring. A row is
+        AMENDABLE after it is written — it is inserted at close with locally computed numbers and
+        later overwritten with venue-authoritative ones — so a poller should re-read rather than
+        cache forever.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+        - name: page
+          in: query
+          required: false
+          description: 1-based.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - name: symbol
+          in: query
+          required: false
+          schema: { type: string }
+        - name: fromMs
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+        - name: toMs
+          in: query
+          required: false
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: One page of closed trades.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradesResponse"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+
+  /connections/{id}/trades/{tradeId}:
+    get:
+      operationId: getTrade
+      tags: [Connections]
+      summary: One closed trade WITH its individual fills
+      description: >-
+        Fills live in their own table and only this surface wants them, so the list read never pays
+        for them. A trade that does not exist, belongs to ANOTHER connection, or is hidden by the
+        phantom-spot-short display rule all answer the same `404` — distinguishing them would report
+        what exists outside this connection.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+        - name: tradeId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: The trade and its fills, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradeDetailResponse"
+        "404":
+          description: No such trade on this connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /app/workspace:
+    get:
+      operationId: getWorkspace
+      tags: [Workspace]
+      summary: The whole workspace — windows, tabs, layouts, chart windows
+      description: >-
+        One read for the entire terminal: every window with its durable id, each window's tabs, each
+        tab's docked `layout` tree, and the chart windows that FLOAT beside it. Those floating
+        windows are the thing `/app/panels` never reported at any version, even though a tab owns
+        them and they survive a restart.
+      parameters:
+        - name: windowId
+          in: query
+          required: false
+          description: Scope the document to one window.
+          schema: { type: string }
+        - name: tabId
+          in: query
+          required: false
+          description: Scope the document to one tab.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The workspace.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /app/windows:
+    get:
+      operationId: listWindows
+      tags: [Workspace]
+      summary: The windows, without any tab payload
+      responses:
+        "200":
+          description: Every tab-hosting window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WindowsResponse"
+
+  /app/windows/{windowId}:
+    patch:
+      operationId: activateWindow
+      tags: [Workspace]
+      summary: Raise a window to the front
+      description: >-
+        Only `active: true` is meaningful — "unfocus this window" names no destination to focus
+        instead, so `false` is refused.
+      parameters:
+        - $ref: "#/components/parameters/windowIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [active]
+              properties:
+                active: { type: boolean, const: true }
+            example: { active: true }
+      responses:
+        "200":
+          description: The window, raised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WindowActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/UnknownWindow"
+
+  /app/tabs:
+    post:
+      operationId: createTab
+      tags: [Workspace]
+      summary: Create a tab
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTabBody"
+            example: { title: Scalp, activate: true }
+      responses:
+        "201":
+          description: The created tab. It has no `layout` until something is added to it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/UnknownWindow"
+
+  /app/tabs/{tabId}:
+    get:
+      operationId: getTab
+      tags: [Workspace]
+      summary: One tab, byte-identical to its node in the workspace
+      parameters:
+        - $ref: "#/components/parameters/tabIdPath"
+      responses:
+        "200":
+          description: The tab and where it sits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabLookupResponse"
+        "404":
+          $ref: "#/components/responses/UnknownTab"
+    patch:
+      operationId: updateTab
+      tags: [Workspace]
+      summary: Activate, rename or reorder a tab
+      description: >-
+        Every field optional, at least one required; applied title → index → active, so one call can
+        rename, move and activate. `title` is PATCH-shaped and that is what keeps a read-modify-write
+        safe: absent leaves the name alone, a string sets it, `null` clears it back to the automatic
+        coin + count label. A caller that reads `"title": "BTC (3)"` and blindly writes the whole
+        object back would otherwise freeze that string — count suffix and all — as a permanent name.
+      parameters:
+        - $ref: "#/components/parameters/tabIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTabBody"
+            example: { active: true }
+      responses:
+        "200":
+          description: The tab, changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/UnknownTab"
+    delete:
+      operationId: closeTab
+      tags: [Workspace]
+      summary: Close a tab
+      description: >-
+        Closes the tab's slots, their feeds and its floating chart windows with it — the same thing
+        the tab's own close button does. Closing the last tab of a BOOK window closes that window;
+        closing the last tab of the MAIN window is refused, because the terminal has no zero-tab state.
+      parameters:
+        - $ref: "#/components/parameters/tabIdPath"
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TabRemovedResponse"
+        "404":
+          $ref: "#/components/responses/UnknownTab"
+        "409":
+          description: The main window's only tab.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example: { code: last_tab, message: The main window must keep at least one tab. }
+
+  /app/slots:
+    post:
+      operationId: addSlots
+      tags: [Workspace]
+      summary: Add one or more boxes
+      description: >-
+        ADDS boxes; it never replaces one. The box named in `target` is an ANCHOR: it survives the
+        call with its id, its content and its live feed intact, and only gets smaller because the new
+        boxes take room from somewhere. To change what a box holds use `setSlot`; to remove it,
+        `removeSlot`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSlotsBody"
+            examples:
+              chartUnderABook:
+                summary: A chart under an existing orderbook
+                value:
+                  target: { slot: 811deac4440b43f2a3223802234fbcb9, side: bottom }
+                  slots:
+                    - content: { kind: chart, exchange: BinanceLinearFutures, symbol: BTCUSDT, interval: M5 }
+              columnAtTheTabEdge:
+                summary: A book and its chart as a new column at the tab's right edge
+                value:
+                  target: { edge: right }
+                  stack: column
+                  slots:
+                    - share: 0.6
+                      content: { kind: orderbook, exchange: BinanceSpot, symbol: ETHUSDT }
+                    - share: 0.4
+                      content: { kind: chart, exchange: BinanceSpot, symbol: ETHUSDT, interval: M1 }
+      responses:
+        "201":
+          description: Every box it made, in request order, each in the tree's own leaf shape.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotsAddedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownSlot"
+
+  /app/slots/{slotId}:
+    get:
+      operationId: getSlot
+      tags: [Workspace]
+      summary: One box and where it sits
+      parameters:
+        - $ref: "#/components/parameters/slotIdPath"
+      responses:
+        "200":
+          description: The slot, byte-identical to its leaf in the tree, plus its position.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceSlotLookupResponse"
+        "404":
+          $ref: "#/components/responses/UnknownSlot"
+    put:
+      operationId: setSlot
+      tags: [Workspace]
+      summary: Set what this box holds (idempotent)
+      description: >-
+        Sets THIS box only. A chart docked beside it is its own leaf with its own id, and re-pointing
+        a neighbour must never delete a box the caller did not name. A kind transition is legal
+        (orderbook box to chart box and back) and the slot id never changes; a same-state request is
+        a no-op and still answers 200. On a WIDGET box every set is refused, a clear included — a
+        widget box once reported as empty, which invited a caller to overwrite it and tore the
+        running widget down.
+      parameters:
+        - $ref: "#/components/parameters/slotIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetSlotContentBody"
+            examples:
+              retarget:
+                summary: Point the box at another instrument
+                value: { content: { kind: chart, exchange: BinanceLinearFutures, symbol: SOLUSDT, interval: M15 } }
+              clear:
+                summary: Clear the box — it stays, with the same id
+                value: { content: { kind: empty } }
+      responses:
+        "200":
+          description: The slot, changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotChangedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/TradingNotEnabled"
+        "404":
+          $ref: "#/components/responses/UnknownSlot"
+        "409":
+          $ref: "#/components/responses/SlotOccupiedByWidget"
+    delete:
+      operationId: removeSlot
+      tags: [Workspace]
+      summary: Remove a box
+      description: Structural — the box is gone and its id retired. A chart paired under an orderbook goes with it.
+      parameters:
+        - $ref: "#/components/parameters/slotIdPath"
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlotRemovedResponse"
+        "404":
+          $ref: "#/components/responses/UnknownSlot"
+
+  /app/chart-windows:
+    get:
+      operationId: listChartWindows
+      tags: [Workspace]
+      summary: The floating chart windows
+      parameters:
+        - name: tabId
+          in: query
+          required: false
+          schema: { type: string }
+        - name: kind
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ChartWindowKind" }
+      responses:
+        "200":
+          description: The chart windows, each identical to its entry on a tab plus `tabId`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChartWindowsResponse"
+    post:
+      operationId: openChartWindow
+      tags: [Workspace]
+      summary: Open a coin's chart window, or its combo chart
+      description: >-
+        `kind: chart` is one standalone chart window; `kind: comboChart` is the 3-pane,
+        3-timeframe combo chart. Dedupe is by `(kind, exchange, symbol)` — the app's existing
+        behaviour, one of each per coin — so a POST for a pair that is already open RE-HOMES the
+        live window to `tabId`, shows it, and answers **200** with that window rather than opening
+        a second one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenChartWindowBody"
+            examples:
+              coinChart:
+                summary: Only the coin's chart
+                value: { kind: chart, exchange: BinanceLinearFutures, symbol: BTCUSDT, interval: M15, activate: true }
+              comboChart:
+                summary: Only the combo chart (three timeframes)
+                value: { kind: comboChart, exchange: BinanceLinearFutures, symbol: ETHUSDT, intervals: [M5, M15, H1], activate: true }
+      responses:
+        "200":
+          description: That pair was already open. The live window, re-homed and shown.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChartWindowActionResponse"
+        "201":
+          description: The window that was opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChartWindowActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/UnknownTab"
+
+  /app/chart-windows/{chartWindowId}:
+    patch:
+      operationId: updateChartWindow
+      tags: [Workspace]
+      summary: Retarget, re-interval, re-home, pin, lock or raise a chart window
+      description: >-
+        `sync` is EXCLUSIVE across combo windows — setting it true turns it off on every other one,
+        because a click must be addressed to exactly one window. The response reports only the
+        patched window, so a client tracking sync re-reads the list.
+      parameters:
+        - $ref: "#/components/parameters/chartWindowIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChartWindowBody"
+            example: { symbol: SOLUSDT, interval: H1, active: true }
+      responses:
+        "200":
+          description: The window, changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChartWindowActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/UnknownChartWindow"
+    delete:
+      operationId: closeChartWindow
+      tags: [Workspace]
+      summary: Close a chart window
+      parameters:
+        - $ref: "#/components/parameters/chartWindowIdPath"
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChartWindowRemovedResponse"
+        "404":
+          $ref: "#/components/responses/UnknownChartWindow"
+
   /app/panels:
     get:
       operationId: listPanels
+      deprecated: true
+      x-removed-in: "1.4.0"
+      x-replaced-by: "getWorkspace (GET /app/workspace)"
       tags: [Panels]
       summary: The window → tab → slot tree
       description: >-
@@ -685,6 +1224,9 @@ paths:
                 $ref: "#/components/schemas/Error"
     post:
       operationId: addPanel
+      deprecated: true
+      x-removed-in: "1.4.0"
+      x-replaced-by: "addSlots (POST /app/slots)"
       tags: [Panels]
       summary: Add a box, a positioned stack of boxes, or an empty box to a tab
       description: >-
@@ -728,6 +1270,9 @@ paths:
   /app/panels/{id}:
     get:
       operationId: getPanel
+      deprecated: true
+      x-removed-in: "1.4.0"
+      x-replaced-by: "getSlot (GET /app/slots/{slotId})"
       tags: [Panels]
       summary: One slot and where it sits
       description: >-
@@ -756,6 +1301,9 @@ paths:
                 $ref: "#/components/schemas/Error"
     put:
       operationId: setPanel
+      deprecated: true
+      x-removed-in: "1.4.0"
+      x-replaced-by: "setSlot (PUT /app/slots/{slotId})"
       tags: [Panels]
       summary: Idempotently set what ONE box holds
       description: >-
@@ -801,6 +1349,9 @@ paths:
                 $ref: "#/components/schemas/Error"
     delete:
       operationId: removePanel
+      deprecated: true
+      x-removed-in: "1.4.0"
+      x-replaced-by: "removeSlot (DELETE /app/slots/{slotId})"
       tags: [Panels]
       summary: Remove the slot
       description: Remove the slot entirely (structural — its paired chart goes with it). A widget box IS removable this way — a deliberate removal by id, not an accident.
@@ -826,7 +1377,7 @@ paths:
   /app/combos:
     post:
       operationId: openCombo
-      tags: [App]
+      tags: [Workspace]
       summary: Open a combo (the coin across every connection)
       description: >-
         Fan one coin across EVERY connection that lists it — one panel per connection. `target`
@@ -1085,6 +1636,27 @@ components:
         type: integer
         enum: [2]
         default: 2
+    windowIdPath:
+      name: windowId
+      in: path
+      required: true
+      description: The window's durable id. The positional index is NOT identity — it shifts when a window closes.
+      schema: { type: string }
+    tabIdPath:
+      name: tabId
+      in: path
+      required: true
+      description: The tab's durable id, stable across a move between windows, a rename and a restart.
+      schema: { type: string }
+    chartWindowIdPath:
+      name: chartWindowId
+      in: path
+      required: true
+      description: >-
+        The chart window's durable id. Deliberately NOT its `(kind, exchange, symbol)` key: the app
+        re-keys that live when a combo window follows a click or the user changes its symbol, so a
+        stored key would silently address a different window later.
+      schema: { type: string }
     slotIdPath:
       name: id
       in: path
@@ -1117,6 +1689,43 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    UnknownWindow:
+      description: No window with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { code: unknown_window, message: No window with that id. }
+    UnknownTab:
+      description: No tab with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { code: unknown_tab, message: No tab with that id. }
+    UnknownSlot:
+      description: No slot with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { code: unknown_slot, message: No slot with that id. }
+    UnknownChartWindow:
+      description: No chart window with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { code: unknown_chart_window, message: No chart window with that id. }
+    SlotOccupiedByWidget:
+      description: >-
+        The box holds a running widget. Every set is refused, a clear included; DELETE still works,
+        because that is a deliberate removal by id rather than an accident.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { code: slot_occupied_by_widget, message: This box holds a running widget. }
     UnknownConnection:
       description: No connection with this id (code `unknown_connection`).
       content:
@@ -1281,6 +1890,13 @@ components:
         descending — and capped at the requested depth.
       required: [exchange, symbol, tickSize, lastPrice, bestBid, bestAsk, bids, asks]
       properties:
+        truncated:
+          type: boolean
+          const: true
+          description: >-
+            Present only when `depth=full` hit the 5000-per-side cap and the reply is SHORTER than
+            the book. Absent otherwise, so a caller never has to guess whether a short book is a
+            trimmed one.
         exchange:
           type: string
           description: The venue id echoed back.
@@ -1742,6 +2358,12 @@ components:
       description: A slot — the durable box (`id` is the handle set / clear / remove take) with what fills it. A leaf IS the slot.
       required: [type, id, content]
       properties:
+        surface:
+          allOf: [{ $ref: "#/components/schemas/Surface" }]
+          description: >-
+            Always `slot`. Present so a client reading a workspace document never has to infer
+            whether a chart is DOCKED in the grid or FLOATING beside it from which array it came out
+            of. (Added 2026-09 with the workspace surface; additive on the deprecated Panels reads.)
         type:
           type: string
           enum: [slot]
@@ -2094,6 +2716,22 @@ components:
           description: Where the combo opens.
           enum: [tab, window]
           default: tab
+        views:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          default: [orderbook]
+          items: { $ref: "#/components/schemas/ComboView" }
+          description: >-
+            What each matched venue opens. `["chart"]` is the chart-only fan-out (#1146); the default
+            keeps the shipped behaviour. ADDITIVE on a live body — and `target` keeps its name for
+            the same reason, since request bodies on this API are additive and never versioned.
+        chart:
+          allOf: [{ $ref: "#/components/schemas/ComboChartOptions" }]
+          description: >-
+            Absent means the user's Combo book settings decide every field. Present as a whole OBJECT
+            or absent as a whole, because "said nothing about charts" and "said no charts" must be
+            distinguishable — the latter is `views: ["orderbook"]`.
 
     AppActionResult:
       type: object
@@ -2220,3 +2858,512 @@ components:
       properties:
         removed:
           type: integer
+    # ── the workspace surface ───────────────────────────────────────────────────
+    # These REUSE the layout vocabulary the Panels section already defines — LayoutNode, SplitNode,
+    # SlotNode, SlotContent and its variants are the same shapes, because the workspace document is
+    # the same tree seen from one level up. Only the containers are new.
+
+    ComboView:
+      type: string
+      enum: [orderbook, chart]
+      description: What a combo fan-out opens per matched venue.
+
+    ComboChartScope:
+      type: string
+      enum: [first, all]
+      description: Dock a combo chart on the first orderbook only, or on every one.
+
+    ComboChartOptions:
+      type: object
+      additionalProperties: false
+      description: >-
+        A caller-named value decides; an absent one follows the user's Combo book settings — the same
+        rule the destination already follows. The venue OPT-OUT set always applies regardless: it is
+        the user's statement about which venues they want to see at all, not a per-call preference.
+      properties:
+        position:
+          allOf: [{ $ref: "#/components/schemas/Side" }]
+          description: "`top` or `bottom` only."
+        scope: { $ref: "#/components/schemas/ComboChartScope" }
+        share:
+          type: number
+          exclusiveMinimum: 0
+          exclusiveMaximum: 1
+          description: The CHART's fraction of each chart|orderbook column.
+        interval: { type: string, description: "Absent: the app default." }
+
+    Surface:
+      type: string
+      enum: [slot, window]
+      description: >-
+        Whether the thing is docked in a tab's layout tree or floating beside it. Stated explicitly
+        so a client never has to infer it from which array it found the object in.
+
+    Side:
+      type: string
+      enum: [left, right, top, bottom]
+
+    WindowKind:
+      type: string
+      enum: [main, book]
+      description: The singleton main window, or one of zero-or-more book windows.
+
+    ChartWindowKind:
+      type: string
+      enum: [chart, comboChart]
+      description: A standalone chart window, or the 3-pane / 3-timeframe combo chart window.
+
+    Bounds:
+      type: object
+      additionalProperties: false
+      required: [left, top, width, height, maximized]
+      description: >-
+        A window rectangle. When `maximized` is true this is the last NON-maximized position — where
+        the window un-maximizes to, not where it sits on screen. The two are meaningless apart.
+      properties:
+        left: { type: integer }
+        top: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        maximized: { type: boolean }
+
+    ChartWindow:
+      oneOf:
+        - $ref: "#/components/schemas/SingleChartWindow"
+        - $ref: "#/components/schemas/ComboChartWindow"
+      discriminator:
+        propertyName: kind
+        mapping:
+          chart: "#/components/schemas/SingleChartWindow"
+          comboChart: "#/components/schemas/ComboChartWindow"
+
+    SingleChartWindow:
+      type: object
+      additionalProperties: false
+      required: [surface, kind, id, exchange, symbol, interval, contentId, bounds, pinned, locked]
+      properties:
+        surface: { type: string, const: window }
+        kind: { type: string, const: chart }
+        id: { type: string }
+        tabId:
+          type: string
+          description: Present on listChartWindows; absent when nested under its own tab, whose position already says it.
+        exchange: { type: string }
+        symbol: { type: string }
+        interval: { type: string }
+        contentId: { type: string, description: The chart's content identity, stable across a restart. }
+        bounds: { $ref: "#/components/schemas/Bounds" }
+        pinned: { type: boolean, description: Always-on-top above Colibri's own windows. New windows default ON. }
+        locked: { type: boolean, description: OS always-on-top, above every application. New windows default OFF. }
+
+    ComboChartWindow:
+      type: object
+      additionalProperties: false
+      required: [surface, kind, id, exchange, symbol, intervals, bounds, pinned, locked, sync]
+      description: >-
+        One symbol across THREE timeframe panes. It has three panes and so no single content
+        identity, which is why it carries no `contentId`.
+      properties:
+        surface: { type: string, const: window }
+        kind: { type: string, const: comboChart }
+        id: { type: string }
+        tabId: { type: string }
+        exchange: { type: string }
+        symbol: { type: string }
+        intervals:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: string }
+        bounds: { $ref: "#/components/schemas/Bounds" }
+        pinned: { type: boolean }
+        locked: { type: boolean }
+        sync:
+          type: boolean
+          description: Follow-the-clicked-orderbook. EXCLUSIVE across combo windows — enabling it disables every other.
+
+    WorkspaceTab:
+      type: object
+      additionalProperties: false
+      required: [id, index, active, title, windows]
+      properties:
+        id: { type: string }
+        index: { type: integer, minimum: 0 }
+        active: { type: boolean, description: Whether it is the tab its window currently shows. }
+        title:
+          type: string
+          description: >-
+            The label the header actually RENDERS — the user's name when the tab has one, else the
+            sticky first coin plus a panel count ("BTC (3)"), else "".
+        layout:
+          $ref: "#/components/schemas/LayoutNode"
+        windows:
+          type: array
+          description: The floating chart windows this tab owns. Always present, empty when it owns none.
+          items: { $ref: "#/components/schemas/ChartWindow" }
+
+    WorkspaceWindow:
+      type: object
+      additionalProperties: false
+      required: [id, index, kind, active, bounds, locked, tabs]
+      properties:
+        id: { type: string }
+        index: { type: integer, minimum: 0, description: Position. The main window is always 0. }
+        kind: { $ref: "#/components/schemas/WindowKind" }
+        active: { type: boolean }
+        bounds: { $ref: "#/components/schemas/Bounds" }
+        locked: { type: boolean }
+        tabs:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceTab" }
+
+    WindowSummary:
+      type: object
+      additionalProperties: false
+      required: [id, index, kind, active, bounds, locked, tabCount]
+      properties:
+        id: { type: string }
+        index: { type: integer, minimum: 0 }
+        kind: { $ref: "#/components/schemas/WindowKind" }
+        active: { type: boolean }
+        bounds: { $ref: "#/components/schemas/Bounds" }
+        locked: { type: boolean }
+        tabCount: { type: integer, minimum: 0 }
+
+    Workspace:
+      type: object
+      additionalProperties: false
+      required: [windows]
+      properties:
+        windows:
+          type: array
+          items: { $ref: "#/components/schemas/WorkspaceWindow" }
+
+    WindowsResponse:
+      type: object
+      additionalProperties: false
+      required: [windows]
+      properties:
+        windows:
+          type: array
+          items: { $ref: "#/components/schemas/WindowSummary" }
+
+    TabPosition:
+      type: object
+      additionalProperties: false
+      required: [windowId, windowIndex, tabCount]
+      properties:
+        windowId: { type: string }
+        windowIndex: { type: integer, minimum: 0 }
+        tabCount: { type: integer, minimum: 1 }
+
+    TabLookupResponse:
+      type: object
+      additionalProperties: false
+      required: [tab, position]
+      properties:
+        tab: { $ref: "#/components/schemas/WorkspaceTab" }
+        position: { $ref: "#/components/schemas/TabPosition" }
+
+    TabActionResponse:
+      type: object
+      additionalProperties: false
+      required: [status, tab, position]
+      properties:
+        status: { type: string, enum: [created, changed] }
+        tab: { $ref: "#/components/schemas/WorkspaceTab" }
+        position: { $ref: "#/components/schemas/TabPosition" }
+
+    WindowActionResponse:
+      type: object
+      additionalProperties: false
+      required: [status, window]
+      properties:
+        status: { type: string, const: changed }
+        window: { $ref: "#/components/schemas/WindowSummary" }
+
+    CreateTabBody:
+      type: object
+      additionalProperties: false
+      properties:
+        windowId: { type: string, description: "Absent: the main window." }
+        title: { type: string, description: "Absent: the automatic coin + count label." }
+        index: { type: integer, minimum: 0, description: "Absent: append." }
+        activate: { type: boolean, default: false, description: A background tool never steals focus. }
+
+    UpdateTabBody:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title:
+          type: [string, "null"]
+          description: A string renames; `null` clears back to the automatic label; ABSENT leaves it alone.
+        index: { type: integer, minimum: 0, description: Reorder within the tab's own window. }
+        active: { type: boolean, const: true, description: Only `true` is meaningful. }
+        raiseWindow:
+          type: boolean
+          default: true
+          description: Activating a tab in a background window surfaces that window too.
+
+    TabRemovedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, tabId]
+      properties:
+        status: { type: string, const: removed }
+        tabId: { type: string }
+
+    SlotTarget:
+      description: >-
+        Where new boxes go: `slot` + `side`, or `edge` — NEVER both, and the handler enforces that
+        before any mutation.
+
+        There is deliberately no "mode". How the room is found next to an anchor is not a caller's
+        choice in this terminal: the side and the two content KINDS decide it. Vertical always
+        divides the anchor's own cell; horizontal nests a pair for DIFFERENT kinds and joins the
+        anchor's row for the SAME kind. A wire field choosing between them would let a caller ask
+        for a layout no other path can produce.
+      oneOf:
+        - title: Beside a box
+          type: object
+          additionalProperties: false
+          required: [slot, side]
+          properties:
+            slot: { type: string, description: The ANCHOR box. It survives, smaller — it is never replaced. }
+            side:
+              allOf: [{ $ref: "#/components/schemas/Side" }]
+              description: REQUIRED with `slot`, never defaulted — it decides the structural outcome.
+        - title: At the tab's edge
+          type: object
+          additionalProperties: false
+          required: [edge]
+          properties:
+            edge:
+              allOf: [{ $ref: "#/components/schemas/Side" }]
+              description: "left/right: a full-height column. top/bottom: a full-width row."
+
+    NewSlot:
+      type: object
+      additionalProperties: false
+      required: [content]
+      description: >-
+        A slot node minus the ids the server mints — `share` and `content`, kept separate exactly as
+        they are on the read side. `share` is converted PER INSERTION: a list nests as it is
+        inserted, so the i-th box asks for a fraction of what is LEFT rather than its global share.
+        Omitted means an even split; values clamp into 0.05–0.95.
+      properties:
+        share: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        content: { $ref: "#/components/schemas/PlaceableContent" }
+
+    AddSlotsBody:
+      type: object
+      additionalProperties: false
+      required: [slots]
+      properties:
+        tabId: { type: string, description: "Absent: the active tab of the main window." }
+        target:
+          allOf: [{ $ref: "#/components/schemas/SlotTarget" }]
+          description: 'Absent: { "edge": "right" }.'
+        stack:
+          type: string
+          enum: [row, column]
+          default: column
+          description: How the NEW boxes arrange among themselves. Ignored for a single box.
+        slots:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: >-
+            At most 16. The per-widget panel cap charges one token per REQUEST, so an unbounded list
+            would create arbitrarily many live feeds for free.
+          items: { $ref: "#/components/schemas/NewSlot" }
+        activate: { type: boolean, default: false, description: True also surfaces the window. }
+
+    SetSlotContentBody:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content: { $ref: "#/components/schemas/PlaceableContent" }
+
+    SlotsAddedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, slots]
+      properties:
+        status: { type: string, const: added }
+        slots:
+          type: array
+          items: { $ref: "#/components/schemas/SlotNode" }
+
+    SlotChangedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, slot]
+      properties:
+        status: { type: string, const: changed }
+        slot: { $ref: "#/components/schemas/SlotNode" }
+
+    SlotRemovedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, slotId]
+      properties:
+        status: { type: string, const: removed }
+        slotId: { type: string }
+
+    WorkspaceSlotPosition:
+      type: object
+      additionalProperties: false
+      required: [windowId, tabId, path, depth]
+      properties:
+        windowId: { type: string }
+        tabId: { type: string }
+        path:
+          type: array
+          items: { type: integer, minimum: 0 }
+          description: The index chain from the tab root.
+        depth: { type: integer, minimum: 0 }
+        parent:
+          allOf: [{ $ref: "#/components/schemas/SlotParent" }]
+          description: ABSENT exactly when the slot is a root — a single-box tab.
+
+    WorkspaceSlotLookupResponse:
+      type: object
+      additionalProperties: false
+      required: [slot, position]
+      properties:
+        slot: { $ref: "#/components/schemas/SlotNode" }
+        position: { $ref: "#/components/schemas/WorkspaceSlotPosition" }
+
+    ChartWindowsResponse:
+      type: object
+      additionalProperties: false
+      required: [chartWindows]
+      properties:
+        chartWindows:
+          type: array
+          items: { $ref: "#/components/schemas/ChartWindow" }
+
+    ChartWindowActionResponse:
+      type: object
+      additionalProperties: false
+      required: [status, chartWindow]
+      properties:
+        status: { type: string, enum: [opened, changed] }
+        chartWindow: { $ref: "#/components/schemas/ChartWindow" }
+
+    ChartWindowRemovedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, chartWindowId]
+      properties:
+        status: { type: string, const: removed }
+        chartWindowId: { type: string }
+
+    OpenChartWindowBody:
+      type: object
+      additionalProperties: false
+      required: [kind, exchange, symbol]
+      properties:
+        kind: { $ref: "#/components/schemas/ChartWindowKind" }
+        exchange: { type: string }
+        symbol: { type: string }
+        interval:
+          type: string
+          description: "`chart` only — refused on `comboChart`. Absent: the app default (M5)."
+        intervals:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: string }
+          description: "`comboChart` only — refused on `chart`. Absent: M5 / M15 / H1."
+        tabId: { type: string, description: "The owning tab. Absent: the active tab of the main window." }
+        activate: { type: boolean, default: false }
+
+    UpdateChartWindowBody:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        exchange: { type: string }
+        symbol: { type: string }
+        interval: { type: string, description: "`chart` only." }
+        intervals:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: string }
+          description: "`comboChart` only."
+        tabId: { type: string, description: Re-home to another tab. }
+        pinned: { type: boolean }
+        locked: { type: boolean }
+        sync: { type: boolean, description: "`comboChart` only. Exclusive across combo windows." }
+        active: { type: boolean, const: true, description: Raise it. }
+
+    # ── closed trades ─────────────────────────────────────────────────────────
+
+    Trade:
+      type: object
+      additionalProperties: false
+      required: [id, exchange, symbol, side, openPrice, closePrice, quantity, volumeUsd, netPnl, pnlPercent, commission, funding, openTimeMs, closeTimeMs]
+      properties:
+        id: { type: integer, format: int64 }
+        exchange: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [Long, Short] }
+        openPrice: { type: string }
+        closePrice: { type: string }
+        quantity: { type: string }
+        volumeUsd: { type: string }
+        netPnl: { type: string }
+        pnlPercent:
+          type: string
+          description: >-
+            RECOMPUTED from netPnl + commission over volumeUsd rather than served from storage — rows
+            written before the fix stored a percent with commission already folded in, which is why
+            the in-app grid ignores the stored value too.
+        commission: { type: string }
+        funding: { type: string }
+        openTimeMs: { type: integer, format: int64 }
+        closeTimeMs: { type: integer, format: int64 }
+
+    TradesResponse:
+      type: object
+      additionalProperties: false
+      required: [connectionId, trades, page, pageSize, totalCount, totalPages]
+      properties:
+        connectionId: { type: string }
+        trades:
+          type: array
+          items: { $ref: "#/components/schemas/Trade" }
+        page: { type: integer }
+        pageSize: { type: integer }
+        totalCount: { type: integer }
+        totalPages: { type: integer }
+
+    TradeFill:
+      type: object
+      additionalProperties: false
+      required: [price, quantity, quoteQuantity, commission, isBuyer, timeMs, venueTradeId]
+      properties:
+        price: { type: string }
+        quantity: { type: string }
+        quoteQuantity: { type: string }
+        commission: { type: string }
+        isBuyer: { type: boolean }
+        timeMs: { type: integer, format: int64 }
+        venueTradeId: { type: string }
+
+    TradeDetailResponse:
+      type: object
+      additionalProperties: false
+      required: [connectionId, trade, fills]
+      properties:
+        connectionId: { type: string }
+        trade: { $ref: "#/components/schemas/Trade" }
+        fills:
+          type: array
+          items: { $ref: "#/components/schemas/TradeFill" }
+
