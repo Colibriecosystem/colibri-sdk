@@ -1283,7 +1283,7 @@ paths:
         workspace, and where "the box next to this one" comes from.
       parameters:
         - $ref: "#/components/parameters/apiVersionHeader"
-        - $ref: "#/components/parameters/slotIdPath"
+        - $ref: "#/components/parameters/panelIdPath"
       responses:
         "200":
           description: The slot and its position.
@@ -1317,7 +1317,7 @@ paths:
         state). On a widget box every set is refused `409 slot_occupied_by_widget`.
       parameters:
         - $ref: "#/components/parameters/apiVersionHeader"
-        - $ref: "#/components/parameters/slotIdPath"
+        - $ref: "#/components/parameters/panelIdPath"
       requestBody:
         required: false
         content:
@@ -1357,7 +1357,7 @@ paths:
       description: Remove the slot entirely (structural — its paired chart goes with it). A widget box IS removable this way — a deliberate removal by id, not an accident.
       parameters:
         - $ref: "#/components/parameters/apiVersionHeader"
-        - $ref: "#/components/parameters/slotIdPath"
+        - $ref: "#/components/parameters/panelIdPath"
       responses:
         "200":
           description: Removed.
@@ -1658,13 +1658,24 @@ components:
         stored key would silently address a different window later.
       schema: { type: string }
     slotIdPath:
+      name: slotId
+      in: path
+      required: true
+      description: >-
+        The box's durable id — a GUID that survives an instrument change, a clear, a kind
+        transition, and a terminal restart. Copy it in the terminal (the ⧉ Copy ID control on a
+        panel; top-right on an empty box) or read it from `GET /app/workspace`.
+      schema:
+        type: string
+    panelIdPath:
       name: id
       in: path
       required: true
       description: >-
-        The slot's durable id — a GUID that survives an instrument change, a clear, a kind
-        transition, and a terminal restart. Copy it in the terminal (the ⧉ Copy ID control on a
-        panel; top-right on an empty box) or read it from `GET /app/panels`.
+        The same durable box id as `slotId`, under the name the deprecated `/app/panels` family
+        uses. A path parameter's NAME has to match its template, so the two spellings cannot share
+        one definition — an importer binds the variable by name and silently binds nothing when it
+        disagrees. Goes with the rest of `/app/panels` in 1.4.0.
       schema:
         type: string
 
@@ -1769,6 +1780,10 @@ components:
             - unknown_tab
             - slot_occupied_by_widget
             - unsupported_api_version
+            - last_tab
+            - unknown_window
+            - unknown_slot
+            - unknown_chart_window
             - trading_not_enabled
             - permission_denied
             - not_ready
@@ -2954,10 +2969,10 @@ components:
         exchange: { type: string }
         symbol: { type: string }
         interval: { type: string }
-        contentId: { type: string, description: The chart's content identity, stable across a restart. }
+        contentId: { type: string, description: "The chart's content identity, stable across a restart." }
         bounds: { $ref: "#/components/schemas/Bounds" }
         pinned: { type: boolean, description: Always-on-top above Colibri's own windows. New windows default ON. }
-        locked: { type: boolean, description: OS always-on-top, above every application. New windows default OFF. }
+        locked: { type: boolean, description: "OS always-on-top, above every application. New windows default OFF." }
 
     ComboChartWindow:
       type: object
@@ -3133,7 +3148,7 @@ components:
           additionalProperties: false
           required: [slot, side]
           properties:
-            slot: { type: string, description: The ANCHOR box. It survives, smaller — it is never replaced. }
+            slot: { type: string, description: "The ANCHOR box. It survives, smaller — it is never replaced." }
             side:
               allOf: [{ $ref: "#/components/schemas/Side" }]
               description: REQUIRED with `slot`, never defaulted — it decides the structural outcome.
@@ -3188,7 +3203,23 @@ components:
       additionalProperties: false
       required: [content]
       properties:
-        content: { $ref: "#/components/schemas/PlaceableContent" }
+        content: { $ref: "#/components/schemas/SettableContent" }
+
+    SettableContent:
+      description: >-
+        What a box may be SET to — `PlaceableContent` plus the empty box. Deliberately wider than
+        the POST union: clearing a box keeps it and its id, so `{ "kind": "empty" }` is a legal
+        thing to declare a box should hold, while POSTing an empty box as part of a stack is
+        refused (`An empty box cannot be part of a stack`) because a stack inserts CONTENT.
+      oneOf:
+        - $ref: "#/components/schemas/PlaceableContent"
+        - type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              enum: [empty]
 
     SlotsAddedResponse:
       type: object
