@@ -2720,12 +2720,15 @@ components:
           type: array
           minItems: 1
           uniqueItems: true
-          default: [orderbook]
           items: { $ref: "#/components/schemas/ComboView" }
           description: >-
-            What each matched venue opens. `["chart"]` is the chart-only fan-out (#1146); the default
-            keeps the shipped behaviour. ADDITIVE on a live body — and `target` keeps its name for
-            the same reason, since request bodies on this API are additive and never versioned.
+            What each matched venue opens. `["chart"]` is the chart-only fan-out (#1146).
+            ABSENT is not `["orderbook"]`: absent means the user's Combo book settings decide
+            whether a chart is paired, which is the combo this route has always opened. An EMPTY
+            array is `400 bad_request` — the key was written, so an opinion was held, and "open
+            nothing" is not one the terminal can honour.
+            ADDITIVE on a live body — and `target` keeps its name for the same reason, since
+            request bodies on this API are additive and never versioned.
         chart:
           allOf: [{ $ref: "#/components/schemas/ComboChartOptions" }]
           description: >-
