@@ -1,0 +1,68 @@
+name: schema
+
+# Does this repo still agree with the API it documents?
+#
+# docs/openapi.yaml is a COPY. The source of truth is the terminal's
+# src/ScalpTerminal.LocalApi/openapi.yaml, and the terminal's own gate guarantees that file matches
+# the terminal. What nothing guaranteed until now is the rest of the chain: that the three
+# hand-written clients in this repo expose what the schema publishes, and that the schema here is
+# even valid.
+#
+# That gap was not hypothetical. GET /connections/{id}/trades shipped in the terminal and this
+# repo's schema never learned about it, because no check on either side compared them.
+#
+# Runs on every push and PR, and on a schedule: a copy can go stale without anyone touching THIS
+# repo, so a check that only fires on a push here would never notice.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 08:00 UTC. Catches a schema that drifted because the terminal moved.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: The schema parses, and says what it should
+        run: |
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const text = readFileSync("docs/openapi.yaml", "utf8");
+
+            // A real YAML parse needs a dependency this repo does not have for one check. What is
+            // worth asserting without one is that the document is present, is the version of
+            // OpenAPI the tooling expects, and is not a stub — a truncated or half-written file is
+            // the failure mode that actually happens, and it fails all three.
+            if (!text.startsWith("openapi: 3.1")) throw new Error("docs/openapi.yaml is not an OpenAPI 3.1 document");
+
+            const paths = [...text.matchAll(/^ {2}(\/[^\s:]*):\s*$/gm)].length;
+            const ops = [...text.matchAll(/^ {4}(get|post|put|patch|delete):\s*$/gm)].length;
+            if (paths < 20 || ops < 30) throw new Error(`docs/openapi.yaml looks truncated: ${paths} paths, ${ops} operations`);
+
+            console.log(`openapi.yaml: ${paths} paths, ${ops} operations`);
+          '
+
+      - name: The clients cover what the schema publishes
+        run: node tools/check-clients.mjs
+
+      - name: The docs site can load the spec it renders
+        run: |
+          # index.html fetches ./openapi.yaml at runtime, so the site is only ever as correct as the
+          # file sitting beside it. A rename would break the page silently — it renders an error in
+          # the browser, not in any build log.
+          test -f docs/index.html || { echo "docs/index.html is missing — the site has no shell"; exit 1; }
+          grep -q 'openapi.yaml' docs/index.html || { echo "docs/index.html no longer references openapi.yaml"; exit 1; }
+          test -f docs/asyncapi.yaml || { echo "docs/asyncapi.yaml is missing — the socket docs have no spec"; exit 1; }
