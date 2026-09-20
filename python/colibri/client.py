@@ -382,6 +382,13 @@ class ColibriClient:
     @staticmethod
     def _kind_first(content: dict) -> dict:
         """Re-emit a content with ``kind`` first — the order is part of the contract, not style."""
+        if not isinstance(content, dict) or "kind" not in content:
+            # Worth naming: the legacy {"exchange", "symbol", "views"} form that add_panel still
+            # takes has no "kind", and a bare KeyError from in here would not say why.
+            raise ValueError(
+                'A content needs a "kind" — "orderbook", "chart" or "empty". The legacy '
+                '{"exchange", "symbol", "views"} form is the panel surface only.'
+            )
         return {"kind": content["kind"], **content}
 
     def get_workspace(self, window_id: str | None = None, tab_id: str | None = None) -> list[dict]:
