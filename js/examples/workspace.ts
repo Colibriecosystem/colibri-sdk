@@ -58,9 +58,13 @@ console.log(`\ncreated tab ${tabId} at index ${made.tab.index} of window ${made.
 
 // POST /app/slots → 201. An ordered stack: an orderbook with its chart under it, 70/30. `share`
 // sits on the SLOT, not inside the content — one written inside a content is silently dropped.
+//
+// `target` is omitted, which the contract defines as `{ edge: "right" }`. Say that explicitly and
+// terminal 1.0.0 answers 404 `unknown_slot` — the edge half of the union is refused on every value
+// there, so the default is reachable only by leaving the field out. `{ slot, side }` works, and is
+// what you want anyway once there is a box to anchor to.
 const added = await client.addSlots({
   tabId,
-  target: { edge: "right" },
   stack: "column",
   slots: [
     { share: 0.7, content: { kind: "orderbook", exchange, symbol: "BTCUSDT" } },
@@ -73,6 +77,13 @@ console.log(`added: ${added.slots.map((s) => `${s.id.slice(0, 8)} ${describe(s.c
 const book = added.slots[0];
 const where = await client.getSlot(book.id);
 console.log(`position: tab ${where.position.tabId} path [${where.position.path}] parent ${JSON.stringify(where.position.parent ?? "(root)")}`);
+
+// DELETE /app/slots/{id} — structural: the box is gone and its id retired. Do the paired chart
+// NOW, while it is still its own box: it is docked under the orderbook, so it goes WITH it the
+// moment that box changes kind or is cleared, and a later remove would 404 on something already
+// gone.
+await client.removeSlot(added.slots[1].id);
+console.log("removed the paired chart — the orderbook is alone in the tab now");
 
 // PUT /app/slots/{id} — idempotent set. The instrument changes; the SLOT ID DOES NOT.
 const changed = await client.setSlot(book.id, { kind: "orderbook", exchange, symbol: "ETHUSDT" });
@@ -108,10 +119,7 @@ console.log(`this tab owns ${(await client.listChartWindows({ tabId })).length} 
 
 // ── tear down ─────────────────────────────────────────────────────────────
 await client.closeChartWindow(opened.chartWindow.id);
-// Removing a box is structural — a chart paired under an orderbook goes WITH it, so remove the
-// stack back to front; the other order would 404 on a box that is already gone.
-for (const s of [...added.slots].reverse()) await client.removeSlot(s.id);
-// Closing the tab would take its slots and chart windows with it anyway.
+// Closing the tab takes whatever it still holds — the cleared box here — with it.
 await client.closeTab(tabId);
 console.log("\ntorn down");
 
