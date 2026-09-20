@@ -392,9 +392,6 @@ export type PanelActionResult = SlotAction;
 // that leads with anything else fails the parse rather than answering a 400. The client methods
 // pin it for you; a hand-built body must do the same.
 
-/** Whether a thing is docked in a tab's layout tree or floating beside it. */
-export type Surface = "slot" | "window";
-
 /** An edge — where new boxes go. Not {@link Side}, which is an ORDER side; two vocabularies. */
 export type SlotSide = "left" | "right" | "top" | "bottom";
 

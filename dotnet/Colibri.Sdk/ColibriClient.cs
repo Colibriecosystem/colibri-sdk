@@ -391,6 +391,23 @@ public sealed class ColibriClient : IDisposable
         bool? raiseWindow = null,
         CancellationToken ct = default)
     {
+        if (clearTitle && title is not null)
+        {
+            // The two say opposite things and the destructive one would win in silence: the clear
+            // answers 200, so a caller who meant to rename would never learn the name was wiped.
+            throw new ArgumentException(
+                "clearTitle restores the automatic label; it cannot be combined with a title to set.",
+                nameof(clearTitle));
+        }
+
+        // raiseWindow is NOT one of these: the terminal asks for title, index or active, and
+        // answers 400 for a body carrying only raiseWindow. Counting it here would let exactly the
+        // round trip this guard exists to prevent go out anyway.
+        if (!clearTitle && title is null && index is null && active is null)
+        {
+            throw new ArgumentException("Name at least one of title, clearTitle, index or active.", nameof(title));
+        }
+
         // A dictionary, not a record: the shared options drop null PROPERTIES, which is what keeps
         // every other body clean — but dictionary VALUES are exempt, so this is the one place a
         // deliberate null can still reach the wire. A record could not express "present and null".
@@ -417,11 +434,6 @@ public sealed class ColibriClient : IDisposable
         if (raiseWindow is not null)
         {
             body["raiseWindow"] = raiseWindow;
-        }
-
-        if (body.Count == 0)
-        {
-            throw new ArgumentException("Name at least one of title, clearTitle, index or active.", nameof(title));
         }
 
         return SendAsync<TabAction>(HttpMethod.Patch, $"/app/tabs/{E(tabId)}", body, ct);
