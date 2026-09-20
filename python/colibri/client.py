@@ -26,6 +26,24 @@ class ColibriError(Exception):
 API_VERSION = 2
 
 
+class _Unset:
+    """"The caller did not mention this field" — deliberately NOT ``None``.
+
+    Every other optional argument here reads ``None`` as "absent", because the body filter is
+    ``{k: v for k, v in body.items() if v is not None}``. A PATCH-shaped field where ``null`` on
+    the wire MEANS something — ``title`` on :meth:`ColibriClient.update_tab`, which clears the tab
+    back to its automatic label — needs a third value, and this is it.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+
 class ColibriClient:
     """
     Talk to a running Colibri terminal over the loopback Local API.
@@ -161,6 +179,38 @@ class ColibriClient:
 
     def balance(self, connection_id: str) -> list[dict]:
         return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/balances")["balances"]
+
+    def list_trades(
+        self,
+        connection_id: str,
+        page: int | None = None,
+        page_size: int | None = None,
+        symbol: str | None = None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+    ) -> dict:
+        """GET /connections/{id}/trades — CLOSED-trade history, newest close first.
+
+        from_ms/to_ms bound the CLOSE time and are half-open [from_ms, to_ms); a value the terminal
+        cannot parse reads as "not supplied" rather than erroring. page is 1-based, page_size 1-500
+        (default 100). A row is AMENDABLE after it is written, so re-read rather than cache.
+        Answers {"connectionId", "trades": [...], "page", "pageSize", "totalCount", "totalPages"};
+        every money and size field on a trade is a decimal STRING.
+        """
+        return self._req(
+            "GET",
+            f"/connections/{urllib.parse.quote(connection_id)}/trades"
+            + self._qs(page=page, pageSize=page_size, symbol=symbol, fromMs=from_ms, toMs=to_ms),
+        )
+
+    def get_trade(self, connection_id: str, trade_id: int) -> dict:
+        """GET /connections/{id}/trades/{tradeId} — one closed trade WITH its fills, oldest first.
+
+        A trade that does not exist, belongs to another connection, or is hidden by the
+        phantom-spot-short rule all answer the same 404. Answers
+        {"connectionId", "trade": {...}, "fills": [...]}.
+        """
+        return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/trades/{trade_id}")
 
     # ── trading (per-connection grant required) ──────────────────────────────
     def place_order(
@@ -308,6 +358,247 @@ class ColibriClient:
     def remove_panel(self, slot_id: str) -> dict:
         """Remove the slot entirely (its paired chart goes with it)."""
         return self._req("DELETE", f"/app/panels/{self._seg(slot_id)}")
+
+    # ── workspace (supersedes panel control; carries no api-version) ─────────
+    # The terminal's WINDOWS, the TABS inside a window, the durable BOXES docked in a tab's layout
+    # tree, and the CHART WINDOWS floating beside them. A tab's "layout" is the very tree the panel
+    # surface serves, so the node and content shapes above apply here unchanged.
+    #
+    #   window  {"id", "index", "kind": "main"|"book", "active", "bounds", "locked", "tabs": [...]}
+    #   tab     {"id", "index", "active", "title", "layout"?, "windows": [<chart window>, ...]}
+    #   bounds  {"left", "top", "width", "height", "maximized"}  # maximized -> the UN-maximized rect
+    #   chart window
+    #           {"surface": "window", "kind": "chart", "id", "tabId"?, "exchange", "symbol",
+    #            "interval", "contentId", "bounds", "pinned", "locked"}
+    #           {"surface": "window", "kind": "comboChart", "id", "tabId"?, "exchange", "symbol",
+    #            "intervals": [i1, i2, i3], "bounds", "pinned", "locked", "sync"}
+    #
+    # A content to PLACE here is {"kind": "orderbook"|"chart"|"empty", ...} WITHOUT "share" — the
+    # share lives on the slot ({"share": 0.3, "content": {...}}), and one written inside a content
+    # is silently dropped. And "kind" must be the FIRST key of a content object: the terminal
+    # resolves the write union by a discriminator it expects to read first, so a content leading
+    # with anything else fails the parse rather than answering a 400. These methods pin it.
+
+    @staticmethod
+    def _kind_first(content: dict) -> dict:
+        """Re-emit a content with ``kind`` first — the order is part of the contract, not style."""
+        return {"kind": content["kind"], **content}
+
+    def get_workspace(self, window_id: str | None = None, tab_id: str | None = None) -> list[dict]:
+        """GET /app/workspace — every window with its tabs, layouts and chart windows.
+
+        Scope it to one window / one tab with the arguments. Answers the list of windows.
+        """
+        return self._req("GET", "/app/workspace" + self._qs(windowId=window_id, tabId=tab_id))["windows"]
+
+    def list_windows(self) -> list[dict]:
+        """GET /app/windows — the windows without any tab payload ("tabCount" instead of the tabs)."""
+        return self._req("GET", "/app/windows")["windows"]
+
+    def activate_window(self, window_id: str) -> dict:
+        """PATCH /app/windows/{windowId} — raise a window to the front. Only {"active": true} is meaningful."""
+        return self._req("PATCH", f"/app/windows/{self._seg(window_id)}", {"active": True})
+
+    def create_tab(
+        self,
+        window_id: str | None = None,
+        title: str | None = None,
+        index: int | None = None,
+        activate: bool = False,
+    ) -> dict:
+        """POST /app/tabs -> 201 — create a tab.
+
+        window_id omitted = the main window; title omitted = the automatic coin + count label;
+        index omitted = append. The new tab has no "layout" until something is added to it.
+        activate=True surfaces it (default False so a background tool never steals focus).
+        Answers {"status": "created", "tab": {...}, "position": {...}}.
+        """
+        body: dict[str, Any] = {"windowId": window_id, "title": title, "index": index}
+        if activate:
+            body["activate"] = True
+        return self._req("POST", "/app/tabs", {k: v for k, v in body.items() if v is not None})
+
+    def get_tab(self, tab_id: str) -> dict:
+        """GET /app/tabs/{tabId} — the tab, byte-identical to its node in the workspace, plus where it sits.
+
+        Answers {"tab": {...}, "position": {"windowId", "windowIndex", "tabCount"}}.
+        """
+        return self._req("GET", f"/app/tabs/{self._seg(tab_id)}")
+
+    def update_tab(
+        self,
+        tab_id: str,
+        title: str | None | _Unset = UNSET,
+        index: int | None = None,
+        active: bool | None = None,
+        raise_window: bool | None = None,
+    ) -> dict:
+        """PATCH /app/tabs/{tabId} — rename, reorder and/or activate (applied title -> index -> active).
+
+        title is TRI-STATE, and the default is the safe one:
+          * UNSET (omitted) leaves the name alone
+          * a string renames the tab
+          * None CLEARS it back to the automatic coin + count label
+        The terminal reads the KEY, not the value, so never pass a title you read back from
+        get_tab — that freezes a rendered label like "BTC (3)" as a permanent custom name. active
+        takes only True; there is no "unfocus this tab". raise_window (default True) surfaces the
+        window when the tab being activated is in a background one.
+        """
+        # Built key by key rather than through the usual `if v is not None` filter: that filter is
+        # what makes None mean ABSENT everywhere else, and here None is the whole point.
+        body: dict[str, Any] = {}
+        if title is not UNSET:
+            body["title"] = title
+        if index is not None:
+            body["index"] = index
+        if active is not None:
+            body["active"] = active
+        if raise_window is not None:
+            body["raiseWindow"] = raise_window
+        return self._req("PATCH", f"/app/tabs/{self._seg(tab_id)}", body)
+
+    def close_tab(self, tab_id: str) -> dict:
+        """DELETE /app/tabs/{tabId} — its slots, feeds and floating chart windows close with it.
+
+        Closing the last tab of a BOOK window closes the window; closing the last tab of the MAIN
+        window is refused (409 last_tab). Answers {"status": "removed", "tabId": ...}.
+        """
+        return self._req("DELETE", f"/app/tabs/{self._seg(tab_id)}")
+
+    def add_slots(
+        self,
+        slots: list[dict],
+        tab_id: str | None = None,
+        target: dict | None = None,
+        stack: str | None = None,
+        activate: bool = False,
+    ) -> dict:
+        """POST /app/slots -> 201 — ADD one or more boxes. It never replaces one.
+
+        slots: [{"content": {...}, "share"?: 0.0-1.0}, ...] — at most 16, each item its own box.
+        share lives HERE, not inside the content; it is converted PER INSERTION, so the i-th box
+        asks for a fraction of what is LEFT, and values clamp into 0.05-0.95.
+        target: {"slot": <anchor id>, "side": "left"|"right"|"top"|"bottom"} OR {"edge": <side>} —
+        never both, and "side" may not travel without "slot". Omitted = {"edge": "right"}. The
+        ANCHOR box survives with its id, its content and its live feed; it only gets smaller.
+        stack ("row"|"column", default "column") is how the NEW boxes arrange among THEMSELVES.
+        Answers {"status": "added", "slots": [<every box, in request order>]}.
+        """
+        pinned = [{**s, "content": self._kind_first(s["content"])} for s in slots]
+        body: dict[str, Any] = {"tabId": tab_id, "target": target, "stack": stack, "slots": pinned}
+        if activate:
+            body["activate"] = True
+        return self._req("POST", "/app/slots", {k: v for k, v in body.items() if v is not None})
+
+    def get_slot(self, slot_id: str) -> dict:
+        """GET /app/slots/{slotId} — one box and where it sits.
+
+        Answers {"slot": {...}, "position": {"windowId", "tabId", "path", "depth", "parent"?}} —
+        note the durable string ids, where the deprecated panel lookup spelled them "window" (an
+        int index) and "tab". parent is absent exactly when the slot is a root (a single-box tab).
+        """
+        return self._req("GET", f"/app/slots/{self._seg(slot_id)}")
+
+    def set_slot(self, slot_id: str, content: dict) -> dict:
+        """PUT /app/slots/{slotId} — declare what THIS box holds. Idempotent.
+
+        content is REQUIRED here, unlike the deprecated set_panel where omitting it cleared the box:
+            {"kind": "orderbook", "exchange": ..., "symbol": ..., "connectionId"?: ...}
+            {"kind": "chart", "exchange": ..., "symbol": ..., "interval"?: ...}
+            {"kind": "empty"}   # clears it — the box stays with its id (or call clear_slot)
+        A kind transition is legal and the slot id never changes; a same-state request is a no-op
+        that still answers 200. On a WIDGET box every set is refused (409), a clear included.
+        Answers {"status": "changed", "slot": {...}}.
+        """
+        return self._req("PUT", f"/app/slots/{self._seg(slot_id)}", {"content": self._kind_first(content)})
+
+    def clear_slot(self, slot_id: str) -> dict:
+        """Clear the box — it stays on screen and keeps its id and its position."""
+        return self.set_slot(slot_id, {"kind": "empty"})
+
+    def remove_slot(self, slot_id: str) -> dict:
+        """DELETE /app/slots/{slotId} — structural: the box is gone and its id retired.
+
+        A chart paired under an orderbook goes with it. Answers {"status": "removed", "slotId": ...}.
+        """
+        return self._req("DELETE", f"/app/slots/{self._seg(slot_id)}")
+
+    def list_chart_windows(self, tab_id: str | None = None, kind: str | None = None) -> list[dict]:
+        """GET /app/chart-windows — the floating chart windows, each carrying the tabId that owns it.
+
+        kind filters to "chart" or "comboChart".
+        """
+        return self._req("GET", "/app/chart-windows" + self._qs(tabId=tab_id, kind=kind))["chartWindows"]
+
+    def open_chart_window(
+        self,
+        kind: str,
+        exchange: str,
+        symbol: str,
+        interval: str | None = None,
+        intervals: list[str] | None = None,
+        tab_id: str | None = None,
+        activate: bool = False,
+    ) -> dict:
+        """POST /app/chart-windows -> 200 OR 201 — open a coin's chart window, or its combo chart.
+
+        201 opened a window. 200 means that (kind, exchange, symbol) was ALREADY open and the live
+        window was re-homed and shown — not an error, and not a new window. interval is "chart"
+        only (refused on comboChart; omitted = M5); intervals is exactly three and "comboChart"
+        only (omitted = M5/M15/H1). tab_id omitted = the active tab of the main window.
+        Answers {"status": "opened"|"changed", "chartWindow": {...}}.
+        """
+        body: dict[str, Any] = {
+            "kind": kind,
+            "exchange": exchange,
+            "symbol": symbol,
+            "interval": interval,
+            "intervals": intervals,
+            "tabId": tab_id,
+        }
+        if activate:
+            body["activate"] = True
+        return self._req("POST", "/app/chart-windows", {k: v for k, v in body.items() if v is not None})
+
+    def update_chart_window(
+        self,
+        chart_window_id: str,
+        exchange: str | None = None,
+        symbol: str | None = None,
+        interval: str | None = None,
+        intervals: list[str] | None = None,
+        tab_id: str | None = None,
+        pinned: bool | None = None,
+        locked: bool | None = None,
+        sync: bool | None = None,
+        active: bool | None = None,
+    ) -> dict:
+        """PATCH /app/chart-windows/{id} — retarget, re-interval, re-home, pin, lock or raise it.
+
+        Name at least one. interval is "chart" only, intervals/sync "comboChart" only, active takes
+        only True (it raises the window). sync is EXCLUSIVE across combo windows and the answer
+        reports only THIS window, so re-read list_chart_windows to see what it turned off.
+        """
+        body: dict[str, Any] = {
+            "exchange": exchange,
+            "symbol": symbol,
+            "interval": interval,
+            "intervals": intervals,
+            "tabId": tab_id,
+            "pinned": pinned,
+            "locked": locked,
+            "sync": sync,
+            "active": active,
+        }
+        return self._req(
+            "PATCH",
+            f"/app/chart-windows/{self._seg(chart_window_id)}",
+            {k: v for k, v in body.items() if v is not None},
+        )
+
+    def close_chart_window(self, chart_window_id: str) -> dict:
+        """DELETE /app/chart-windows/{id} — close it. Answers {"status": "removed", "chartWindowId": ...}."""
+        return self._req("DELETE", f"/app/chart-windows/{self._seg(chart_window_id)}")
 
     # ── notifications & signals ──────────────────────────────────────────────
     def notify(self, message: str, severity: str = "info", source: str | None = None) -> dict:

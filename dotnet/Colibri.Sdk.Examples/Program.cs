@@ -67,6 +67,78 @@ if (book.BestBid is not null)
     Console.WriteLine($"swept {sweep.Removed} fired level(s)");
 }
 
+// ── workspace (supersedes /app/panels) ─────────────────────────────────────────
+// Read-only here. Every write is shown commented, because they move the user's windows around;
+// the js/python `workspace` examples run the full create → fill → tear-down cycle.
+foreach (var w in await client.ListWindowsAsync())
+{
+    Console.WriteLine($"\nwindow {w.Index} {w.Kind}{(w.Active ? " *" : "")}  {w.TabCount} tab(s)  {w.Bounds.Width}x{w.Bounds.Height}");
+}
+
+foreach (var w in await client.GetWorkspaceAsync())
+{
+    foreach (var t in w.Tabs)
+    {
+        var boxes = t.Layout is null ? "empty" : $"{Count(t.Layout)} box(es)";
+        Console.WriteLine($"  tab {t.Index} \"{t.Title}\" ({t.Id}){(t.Active ? " *" : "")}  {boxes}");
+        foreach (var cw in t.Windows)
+        {
+            var tf = cw.IsCombo ? string.Join("/", cw.Intervals!) : cw.Interval;
+            Console.WriteLine($"    ↗ {cw.Kind} {cw.Symbol} {tf}{(cw.Pinned ? " pinned" : "")}");
+        }
+    }
+}
+
+Console.WriteLine($"chart windows open: {(await client.ListChartWindowsAsync()).Count}");
+
+// The writes (each one moves the user's terminal, so they are not run by default):
+// var made = await client.CreateTabAsync(title: "SDK demo");
+// var added = await client.AddSlotsAsync(
+//     [NewSlot.Orderbook(exchange, symbol, share: 0.7), NewSlot.Chart(exchange, symbol, "M5", 0.3)],
+//     tabId: made.Tab.Id, target: SlotTarget.AtEdge("right"), stack: "column");
+// var box = (SlotNode)added.Slots[0];
+// await client.GetSlotAsync(box.Id);                                  // where it sits
+// await client.SetSlotAsync(box.Id, SettableContent.Chart(exchange, symbol, "M15"));  // id is stable
+// await client.ClearSlotAsync(box.Id);                                // the box stays, cleared
+// await client.UpdateTabAsync(made.Tab.Id, title: "Scalp");           // rename
+// await client.UpdateTabAsync(made.Tab.Id, index: 0);                 // reorder — the name SURVIVES
+// await client.UpdateTabAsync(made.Tab.Id, clearTitle: true);         // back to the automatic label
+// var win = await client.OpenChartWindowAsync("chart", exchange, "SOLUSDT", interval: "M5");
+// await client.UpdateChartWindowAsync(win.ChartWindow.Id, interval: "H1");
+// await client.CloseChartWindowAsync(win.ChartWindow.Id);
+// await client.RemoveSlotAsync(box.Id);
+// await client.CloseTabAsync(made.Tab.Id);                            // takes its boxes with it
+// await client.ActivateWindowAsync(made.Position.WindowId);           // raise the window
+
+static int Count(LayoutNode node) => node switch
+{
+    SplitNode s => s.Children.Sum(Count),
+    _ => 1,
+};
+
+// ── closed trades (first connection) ───────────────────────────────────────────
+// Every money and size field is a decimal STRING — parse at the edge, never store the float.
+if (connections.Count > 0)
+{
+    var id = connections[0].Id;
+    var page = await client.ListTradesAsync(id, pageSize: 5);
+    Console.WriteLine($"\n{id}: {page.TotalCount} closed trade(s), page {page.Page}/{page.TotalPages}");
+    foreach (var t in page.Trades)
+    {
+        Console.WriteLine($"  #{t.Id} {t.Side} {t.Symbol}  {t.OpenPrice} → {t.ClosePrice}  net {t.NetPnl} ({t.PnlPercent}%)");
+    }
+
+    if (page.Trades.Count > 0)
+    {
+        var detail = await client.GetTradeAsync(id, page.Trades[0].Id);
+        Console.WriteLine($"  #{detail.Trade.Id} is {detail.Fills.Count} fill(s):");
+        foreach (var f in detail.Fills)
+        {
+            Console.WriteLine($"    {(f.IsBuyer ? "buy " : "sell")} {f.Quantity} @ {f.Price}  fee {f.Commission}");
+        }
+    }
+}
+
 // ── trading (grant-gated; only with --arm) ─────────────────────────────────────
 var granted = connections.FirstOrDefault(c => c.ApiTradingEnabled);
 if (granted is not null && armed && book.BestBid is not null)
