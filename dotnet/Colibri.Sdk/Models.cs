@@ -139,8 +139,15 @@ public abstract record LayoutNode
 /// <summary>A split: <c>Orientation</c> ∈ <c>row</c> (children side by side) | <c>column</c> (stacked).</summary>
 public sealed record SplitNode(string Orientation, IReadOnlyList<LayoutNode> Children) : LayoutNode;
 
-/// <summary>A slot — the durable box (<c>Id</c> is the op key for set / clear / remove) with what fills it.</summary>
-public sealed record SlotNode(string Id, SlotContent Content) : LayoutNode;
+/// <summary>
+///     A slot — the durable box (<c>Id</c> is the op key for set / clear / remove) with what fills it.
+///     <c>Surface</c> is <c>"slot"</c> on the workspace surface and null on the deprecated
+///     <c>/app/panels</c> reads, which do not send it.
+/// </summary>
+public sealed record SlotNode(string Id, SlotContent Content) : LayoutNode
+{
+    public string? Surface { get; init; }
+}
 
 /// <summary>What a slot holds — a union on <c>kind</c>. <c>ContentId</c> is UNIFORM across the filled kinds.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
@@ -205,6 +212,267 @@ public sealed record PanelContent(
 
 /// <summary>Where a stack lands: beside <c>SlotId</c> on <c>Side</c> (<c>left|right|top|bottom</c>) using <c>Action</c> (<c>pair|row|column|intoRow</c>; null = pair).</summary>
 public sealed record PanelTarget(string SlotId, string? Side = null, string? Action = null);
+
+// ── workspace (supersedes panels; carries no api-version — every route in it is new) ────────────
+// The terminal's WINDOWS, the TABS inside a window, the durable BOXES docked in a tab's layout
+// tree, and the CHART WINDOWS floating beside them. A tab's Layout is the very tree the panel
+// surface serves, so LayoutNode / SplitNode / SlotNode / SlotContent are reused verbatim.
+//
+// The write types below have PRIVATE constructors and static factories on purpose. A content
+// object must put `kind` FIRST on the wire — the terminal resolves the write union by a
+// discriminator it expects to read before anything else, and a content that leads with another key
+// fails the parse rather than answering a 400. [JsonPropertyOrder(-1)] plus a factory is what makes
+// that unrepresentable, rather than a rule someone has to remember.
+
+/// <summary>
+///     A window rectangle. When <c>Maximized</c> is true this is the last NON-maximized position —
+///     where the window un-maximizes to, not where it sits on screen. The two are meaningless apart.
+/// </summary>
+public sealed record Bounds(int Left, int Top, int Width, int Height, bool Maximized);
+
+/// <summary>
+///     A floating chart window a tab owns. <c>Kind</c> ∈ <c>chart</c> (one timeframe — has
+///     <see cref="Interval" /> and <see cref="ContentId" />) | <c>comboChart</c> (three panes — has
+///     <see cref="Intervals" /> and <see cref="Sync" />, and NO content identity, because three panes
+///     have no single one). The four kind-specific members are null on the other kind.
+///     <para>
+///         Flat rather than a polymorphic hierarchy: the two variants share nine of twelve fields, so
+///         a base type would buy matching on two of them at the cost of a cast on every ordinary read.
+///     </para>
+/// </summary>
+public sealed record ChartWindow(
+    string Surface,
+    string Kind,
+    string Id,
+    string Exchange,
+    string Symbol,
+    Bounds Bounds,
+    bool Pinned,
+    bool Locked,
+    string? TabId = null,
+    string? Interval = null,
+    string? ContentId = null,
+    IReadOnlyList<string>? Intervals = null,
+    bool? Sync = null)
+{
+    /// <summary>True for the 3-pane / 3-timeframe combo window.</summary>
+    [JsonIgnore]
+    public bool IsCombo => Kind == "comboChart";
+}
+
+/// <summary>
+///     One tab of the workspace. <c>Title</c> is the label the header actually RENDERS — the user's
+///     name when the tab has one, else the sticky first coin plus a panel count (<c>"BTC (3)"</c>).
+///     <c>Layout</c> is null on a tab that has never been laid out; <c>Windows</c> is always present,
+///     empty when the tab owns no floating chart window.
+/// </summary>
+public sealed record WorkspaceTab(
+    string Id,
+    int Index,
+    bool Active,
+    string Title,
+    IReadOnlyList<ChartWindow> Windows,
+    LayoutNode? Layout = null);
+
+/// <summary>One window with its whole tab payload. <c>Kind</c> ∈ <c>main</c> | <c>book</c>; <c>Index</c> 0 is the main window.</summary>
+public sealed record WorkspaceWindow(
+    string Id,
+    int Index,
+    string Kind,
+    bool Active,
+    Bounds Bounds,
+    bool Locked,
+    IReadOnlyList<WorkspaceTab> Tabs);
+
+/// <summary>One window WITHOUT its tab payload — <c>TabCount</c> instead of the tabs themselves.</summary>
+public sealed record WindowSummary(
+    string Id,
+    int Index,
+    string Kind,
+    bool Active,
+    Bounds Bounds,
+    bool Locked,
+    int TabCount);
+
+/// <summary>Which window a tab sits in, and where.</summary>
+public sealed record TabPosition(string WindowId, int WindowIndex, int TabCount);
+
+/// <summary><c>GET /app/tabs/{tabId}</c> — the tab, byte-identical to its node in the workspace, plus where it sits.</summary>
+public sealed record TabLookup(WorkspaceTab Tab, TabPosition Position);
+
+/// <summary>The answer to a tab create / update. <c>Status</c> ∈ <c>created</c> | <c>changed</c>.</summary>
+public sealed record TabAction(string Status, WorkspaceTab Tab, TabPosition Position);
+
+/// <summary>The answer to a tab close.</summary>
+public sealed record TabRemoved(string Status, string TabId);
+
+/// <summary>The answer to a window activate.</summary>
+public sealed record WindowAction(string Status, WindowSummary Window);
+
+/// <summary>
+///     Where one box sits on the workspace surface. NOT <see cref="SlotPosition" />: that one keys its
+///     window by INDEX and spells the tab <c>Tab</c>; this one carries durable string ids for both.
+///     <c>Parent</c> is null exactly when the slot is a root — a single-box tab.
+/// </summary>
+public sealed record WorkspaceSlotPosition(
+    string WindowId,
+    string TabId,
+    IReadOnlyList<int> Path,
+    int Depth,
+    SlotParent? Parent = null);
+
+/// <summary><c>GET /app/slots/{slotId}</c> — the box (a <see cref="SlotNode" />) and where it sits.</summary>
+public sealed record WorkspaceSlotLookup(LayoutNode Slot, WorkspaceSlotPosition Position);
+
+/// <summary>The answer to an add — every box it made, in request order, each in the tree's own leaf shape.</summary>
+public sealed record SlotsAdded(string Status, IReadOnlyList<LayoutNode> Slots);
+
+/// <summary>The answer to a set — THIS box only.</summary>
+public sealed record SlotChanged(string Status, LayoutNode Slot);
+
+/// <summary>The answer to a remove — the box is gone and its id retired.</summary>
+public sealed record SlotRemoved(string Status, string SlotId);
+
+/// <summary>The answer to a chart-window open / update. <c>Status</c> ∈ <c>opened</c> | <c>changed</c>.</summary>
+public sealed record ChartWindowAction(string Status, ChartWindow ChartWindow);
+
+/// <summary>The answer to a chart-window close.</summary>
+public sealed record ChartWindowRemoved(string Status, string ChartWindowId);
+
+/// <summary>
+///     What a box may hold. <c>Kind</c> ∈ <c>orderbook</c> | <c>chart</c> | <c>empty</c> — build one
+///     with a factory. <see cref="Empty" /> clears a box on a set, and is REFUSED inside an add,
+///     because an add inserts CONTENT.
+///     <para>
+///         Note there is no <c>Share</c> here: on this surface the share belongs to the
+///         <see cref="NewSlot" />, and one written inside a content is silently dropped.
+///     </para>
+/// </summary>
+public sealed record SettableContent
+{
+    private SettableContent() { }
+
+    /// <summary>
+    ///     FIRST on the wire on purpose — the terminal resolves this union by a discriminator it
+    ///     expects to read before anything else.
+    /// </summary>
+    [JsonPropertyOrder(-1)]
+    public string Kind { get; private init; } = "empty";
+
+    public string? Exchange { get; private init; }
+    public string? Symbol { get; private init; }
+    public string? Interval { get; private init; }
+    public string? ConnectionId { get; private init; }
+
+    /// <summary>Clear the box — it stays on screen and keeps its id.</summary>
+    public static SettableContent Empty { get; } = new();
+
+    /// <summary>An orderbook; <paramref name="connectionId" /> binds a trading account (GRANT-gated, null = the app picks).</summary>
+    public static SettableContent Orderbook(string exchange, string symbol, string? connectionId = null) =>
+        new() { Kind = "orderbook", Exchange = exchange, Symbol = symbol, ConnectionId = connectionId };
+
+    /// <summary>A chart; <paramref name="interval" /> null = the app default.</summary>
+    public static SettableContent Chart(string exchange, string symbol, string? interval = null) =>
+        new() { Kind = "chart", Exchange = exchange, Symbol = symbol, Interval = interval };
+}
+
+/// <summary>
+///     One box to create — a slot node minus the ids the server mints. <c>Share</c> (0–1, exclusive)
+///     is converted PER INSERTION: a list nests as it is inserted, so the i-th box asks for a fraction
+///     of what is LEFT. Omitted = an even split; values clamp into 0.05–0.95.
+/// </summary>
+public sealed record NewSlot
+{
+    private NewSlot() { }
+
+    public double? Share { get; private init; }
+    public SettableContent Content { get; private init; } = SettableContent.Empty;
+
+    /// <summary>An orderbook box.</summary>
+    public static NewSlot Orderbook(string exchange, string symbol, string? connectionId = null, double? share = null) =>
+        new() { Share = share, Content = SettableContent.Orderbook(exchange, symbol, connectionId) };
+
+    /// <summary>A chart box.</summary>
+    public static NewSlot Chart(string exchange, string symbol, string? interval = null, double? share = null) =>
+        new() { Share = share, Content = SettableContent.Chart(exchange, symbol, interval) };
+}
+
+/// <summary>
+///     Where new boxes go: beside an anchor box (<see cref="Beside" />) or at the tab's edge
+///     (<see cref="AtEdge" />) — never both, and a side never travels without its anchor. The
+///     constructor is private so the illegal combination cannot be built at all.
+///     <para>
+///         There is deliberately no "mode": how the room is found next to an anchor is decided by the
+///         side and the two content kinds, not by the caller.
+///     </para>
+/// </summary>
+public sealed record SlotTarget
+{
+    private SlotTarget() { }
+
+    /// <summary>The ANCHOR box. It survives, smaller — it is never replaced.</summary>
+    public string? Slot { get; private init; }
+
+    /// <summary><c>left|right|top|bottom</c>; required with <see cref="Slot" />, never defaulted — it decides the structural outcome.</summary>
+    public string? Side { get; private init; }
+
+    /// <summary><c>left</c>/<c>right</c>: a full-height column. <c>top</c>/<c>bottom</c>: a full-width row.</summary>
+    public string? Edge { get; private init; }
+
+    /// <summary>Beside <paramref name="slotId" /> on <paramref name="side" />.</summary>
+    public static SlotTarget Beside(string slotId, string side) => new() { Slot = slotId, Side = side };
+
+    /// <summary>At the tab's edge.</summary>
+    public static SlotTarget AtEdge(string edge) => new() { Edge = edge };
+}
+
+// ── closed trades ───────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+///     One CLOSED position — a history row, not a live tape print. <c>Side</c> ∈ <c>Long</c> |
+///     <c>Short</c>; every money and size field is a decimal STRING. A row is AMENDABLE after it is
+///     written, so a poller should re-read rather than cache.
+/// </summary>
+public sealed record ClosedTrade(
+    long Id,
+    string Exchange,
+    string Symbol,
+    string Side,
+    string OpenPrice,
+    string ClosePrice,
+    string Quantity,
+    string VolumeUsd,
+    string NetPnl,
+    string PnlPercent,
+    string Commission,
+    string Funding,
+    long OpenTimeMs,
+    long CloseTimeMs);
+
+/// <summary><c>GET /connections/{id}/trades</c> — one page of history, newest CLOSE first.</summary>
+public sealed record ClosedTradesPage(
+    string ConnectionId,
+    IReadOnlyList<ClosedTrade> Trades,
+    int Page,
+    int PageSize,
+    int TotalCount,
+    int TotalPages);
+
+/// <summary>One venue fill that makes up a closed trade.</summary>
+public sealed record ClosedTradeFill(
+    string Price,
+    string Quantity,
+    string QuoteQuantity,
+    string Commission,
+    bool IsBuyer,
+    long TimeMs,
+    string VenueTradeId);
+
+/// <summary><c>GET /connections/{id}/trades/{tradeId}</c> — one closed trade with its fills, oldest first.</summary>
+public sealed record ClosedTradeDetail(
+    string ConnectionId,
+    ClosedTrade Trade,
+    IReadOnlyList<ClosedTradeFill> Fills);
 
 /// <summary>One venue from <c>GET /exchanges</c> — <c>Id</c> is the string every exchange param accepts.</summary>
 public sealed record ExchangeInfo(string Id, string Name, string MarketType, bool Trading);

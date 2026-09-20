@@ -73,19 +73,32 @@ var book = await client.BookAsync("BinanceSpot", "BTCUSDT", depth: 10);
 
 Read: `/ping` · `/exchanges` · `/exchanges/{exchange}/symbols` · `/markets/{exchange}/{symbol}/book`
 · `…/clusters` · `…/funding` · `/connections` · `/connections/{id}/positions|orders|balances` ·
-orderbook settings (GET/PATCH). Trade (per-connection grant; the venue derives from the connection):
-place / cancel / bulk cancel (`/connections/{id}/orders`), close positions
+**closed-trade history** (`/connections/{id}/trades`, paged and filterable, plus one trade with its
+individual fills) · orderbook settings (GET/PATCH). Trade (per-connection grant; the venue derives
+from the connection): place / cancel / bulk cancel (`/connections/{id}/orders`), close positions
 (`/connections/{id}/positions`), and the all-granted sweeps (`DELETE /orders`,
 `DELETE /positions`). Bridge: open a symbol or combo in the terminal, raise a toast, post a market
-signal, manage price-alert signal levels (incl. the triggered-lifecycle sweep). **Panel control**
-(`/app/panels`, `api-version: 2`): read the terminal's window → tab → **layout tree** — a split is a
-`row`/`column` of children, a leaf IS the slot, and what fills it is a union on `kind`
-(`orderbook` | `chart` | `widget` | `empty`) — and drive any box by its **durable slot id** (survives
-an instrument change, a clear, a kind transition, and restart): add one box or a positioned STACK,
-change / clear / remove, bind a granted trading account, ask where a slot sits. Every SDK here
-sends `api-version: 2`; an unversioned request still gets the older flat shape until terminal
-1.4.0 removes it. Stream: `book`, `trades`, `funding`,
-`positions`, `orders`, `balance`, `notifications`, `signalLevels`.
+signal, manage price-alert signal levels (incl. the triggered-lifecycle sweep).
+
+**Workspace** (`/app/workspace`, `/app/windows`, `/app/tabs`, `/app/slots`, `/app/chart-windows`):
+read the whole document — windows → tabs → **layout tree** (a split is a `row`/`column` of children,
+a leaf IS the slot, and what fills it is a union on `kind`: `orderbook` | `chart` | `widget` |
+`empty`) — plus the chart windows that float beside a tab. Then drive it: create / rename / reorder
+/ close a **tab**, ADD one box or a positioned stack beside an anchor that survives, set / clear /
+remove a box by its **durable slot id** (which survives an instrument change, a clear, a kind
+transition, and a restart), bind a granted trading account, open / retarget / pin / close a **chart
+window**. Two rules worth knowing before you write: in a content object `kind` must be the FIRST
+key, and on `PATCH /app/tabs/{id}` a `title` of `null` CLEARS the name while an absent one leaves
+it — the SDKs pin both for you. This surface carries **no** `api-version`, because every route in
+it is new.
+
+**Panel control** (`/app/panels`, `api-version: 2`) is the same boxes through the older, narrower
+door and is **deprecated** — it has no windows, no tabs and no chart windows. Every SDK here sends
+`api-version: 2`; an unversioned request still gets the older flat shape until terminal 1.4.0
+removes the route family entirely.
+
+Stream: `book`, `trades`, `funding`, `positions`, `orders`, `balance`, `notifications`,
+`signalLevels`.
 
 See [`docs/Colibri-Api.md`](docs/Colibri-Api.md) for the full contract.
 
@@ -101,7 +114,8 @@ in `dotnet/Colibri.Sdk.Examples`):
 | `account` | connections · positions · orders · balance |
 | `trading` | place · cancel · bulk cancel · all-granted sweeps *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
 | `app-and-signals` | open-symbol · combo · notify · signal · signal-levels CRUD + triggered sweep |
-| `panels` | panel control (api-version 2): layout tree → add → where am I → change (id stable) → kind transition → a positioned stack → clear → remove |
+| `workspace` | the workspace surface: read the document → create a tab → add a stack → where am I → set (id stable) → kind transition → clear → the tri-state tab title → a chart window → tear it all down; then the closed-trade history + one trade's fills |
+| `panels` | *(deprecated)* panel control (api-version 2): layout tree → add → where am I → change (id stable) → kind transition → a positioned stack → clear → remove |
 | `orderbook-stream` / `live-trades` | focused WebSocket streams |
 | `stream-all` | every WS channel at once |
 

@@ -98,6 +98,23 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
 | DELETE | `/orders` | cancel every order on EVERY granted account → `202 {status, accounts}` |
 | DELETE | `/positions` | close every position on EVERY granted account → `202 {status, accounts}` |
+| GET | `/connections/{id}/trades` | `?page=` `?pageSize=` `?symbol=` `?fromMs=` `?toMs=` — CLOSED-trade history, newest close first. `fromMs`/`toMs` bound the CLOSE time, half-open `[from, to)` |
+| GET | `/connections/{id}/trades/{tradeId}` | one closed trade WITH its individual venue fills, oldest first |
+| GET | `/app/workspace` | `?windowId=` `?tabId=` — the whole document: windows → tabs → layout tree + the chart windows each tab owns |
+| GET | `/app/windows` | the windows without any tab payload (`tabCount` instead of the tabs) |
+| PATCH | `/app/windows/{windowId}` | `{active: true}` — raise it. Only `true` is meaningful |
+| POST | `/app/tabs` | `{windowId?, title?, index?, activate?}` → `201 {status, tab, position}` — the new tab has no `layout` until something is added |
+| GET | `/app/tabs/{tabId}` | `{tab, position}` — the tab, byte-identical to its node in the workspace |
+| PATCH | `/app/tabs/{tabId}` | `{title?, index?, active?, raiseWindow?}` — applied title → index → active. **`title: null` CLEARS the name; an absent `title` leaves it** |
+| DELETE | `/app/tabs/{tabId}` | closes its slots, feeds and chart windows with it. The MAIN window's last tab is refused (`409 last_tab`) |
+| POST | `/app/slots` | `{tabId?, target?, stack?, slots, activate?}` → `201 {status, slots}` — ADDS boxes (≤16); the anchor survives, smaller. `target` is `{slot, side}` XOR `{edge}` |
+| GET | `/app/slots/{slotId}` | `{slot, position}` — `position` is `{windowId, tabId, path, depth, parent?}`, durable ids both |
+| PUT | `/app/slots/{slotId}` | `{content}` — **required here**; `{kind:"empty"}` clears the box (it keeps its id). A widget box → `409` |
+| DELETE | `/app/slots/{slotId}` | structural: the box is gone, its id retired; a paired chart goes with it |
+| GET | `/app/chart-windows` | `?tabId=` `?kind=` — the floating chart windows, each carrying its `tabId` |
+| POST | `/app/chart-windows` | `{kind, exchange, symbol, interval?, intervals?, tabId?, activate?}` → **`200` or `201`**; `200` = that `(kind, exchange, symbol)` was already open and was re-homed |
+| PATCH | `/app/chart-windows/{id}` | `{exchange?, symbol?, interval?, intervals?, tabId?, pinned?, locked?, sync?, active?}` — `sync` is exclusive across combo windows |
+| DELETE | `/app/chart-windows/{id}` | close it |
 | GET | `/app/panels` | `?tabId=` `?windowIndex=` — the window → tab → **layout tree** (`api-version: 2`; unversioned = the v1 flat `slots`, until 1.4.0) |
 | GET | `/app/panels/{slotId}` | one slot — byte-identical to its tree leaf — plus `position` (`window`, `tab`, `path`, `depth`, `parent?`) |
 | POST | `/app/panels` | `{tabId?, contents? \| content?, target?, orientation?, activate?}` → `201 {status, slot, slots?}` — a STACK of boxes (each its own box, ≤16, positioned beside a slot) or ONE box; `{kind:"empty"}` / no content = a bare "+" box; `activate` surfaces the window |
@@ -117,8 +134,24 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 `DELETE /signal-levels/triggered`). A level is a pure market alert — venue + symbol only, never
 tied to a connection.
 
-**Panel control:** a **slot** is the durable box in the terminal's grid — its GUID `slotId` survives
-an instrument change, a clear, a kind transition, and a terminal restart. A **panel** is the
+**Workspace:** the surface that supersedes Panels. A **window** holds **tabs**; a tab holds ONE
+layout tree whose leaves are the durable **boxes**, and owns zero or more **chart windows** that
+float beside it. Ids are durable strings throughout — note `GET /app/slots/{id}` answers
+`{windowId, tabId, …}` where the older panel lookup answered `{window: <int index>, tab}`. It
+carries **no** `api-version`, because every route in it is new.
+
+Two rules a hand-written client has to know. First, **`kind` must be the FIRST key of a content
+object** (`{"kind":"chart","exchange":…}`, never `{"exchange":…,"kind":"chart"}`) — the terminal
+resolves the write union by a discriminator it reads before anything else. Second, `title` on
+`PATCH /app/tabs/{id}` is **tri-state**: a string renames, `null` CLEARS the name back to the
+automatic coin + count label, and an ABSENT key leaves it alone. The terminal reads the KEY, not the
+value, so round-tripping a tab you just read will freeze its rendered label (`"BTC (3)"`, count
+suffix and all) as a permanent custom name. Also: a `share` belongs to a slot
+(`{"share":0.3,"content":{…}}`), not inside its content, where it is silently dropped.
+
+**Panel control** *(deprecated — removed in terminal 1.4.0; use Workspace)*: a **slot** is the
+durable box in the terminal's grid — its GUID `slotId` survives an instrument change, a clear, a
+kind transition, and a terminal restart. A **panel** is the
 content that fills it. Copy ids in the terminal: the **⧉ Copy ID** control on a panel (top-right on
 an empty box) for a slot; **right-click a tab header → Copy tab ID** for the `POST` add-target.
 
@@ -158,6 +191,16 @@ itself (no grant needed — the app picks, not the API).
 | `tabId` | `POST /app/panels`, `GET ?tabId=` | GUID ("N" form) — a tab's durable id | Copy: right-click a tab header → **Copy tab ID** |
 | `slotId` | `/app/panels/{slotId}` | GUID ("N" form) — the durable box handle | Copy: the ⧉ control on a panel; survives change / clear / restart |
 | `windowIndex` | `GET /app/panels?windowIndex=` | int ≥ 0, positional | Out-of-range → empty tree (window ids are not durable yet) |
+| `windowId` | `/app/windows/{windowId}`, `GET /app/workspace?windowId=` | GUID ("N" form) — a window's durable id | From `GET /app/windows`. The main window is always `index: 0` |
+| `tabId` (path) | `/app/tabs/{tabId}` | GUID ("N" form) | Also the `tabId` body field on `/app/slots` and `/app/chart-windows` |
+| `slotId` | `/app/slots/{slotId}` | GUID ("N" form) — the durable box handle | The SAME id the deprecated `/app/panels/{id}` spells `id` |
+| `chartWindowId` | `/app/chart-windows/{id}` | GUID ("N" form) | From `GET /app/chart-windows` |
+| `target` | `POST /app/slots` | `{slot, side}` **XOR** `{edge}` | `side`/`edge` ∈ `left\|right\|top\|bottom`. Never both, and `side` may not travel without `slot`. Omitted = `{"edge":"right"}` |
+| `stack` | `POST /app/slots` | `row` \| `column`, default `column` | How the NEW boxes arrange among THEMSELVES; ignored for a single box |
+| `share` | `POST /app/slots`, on a SLOT | number, 0–1 exclusive | Converted PER INSERTION; clamps into 0.05–0.95. Inside a `content` it is silently dropped |
+| `kind` (chart window) | `/app/chart-windows` | `chart` \| `comboChart` | `interval` is `chart` only; `intervals` (exactly 3) and `sync` are `comboChart` only |
+| `page` / `pageSize` | `GET /connections/{id}/trades` | int ≥ 1 / int 1–500, default 1 / 100 | 1-based paging over closed trades |
+| `fromMs` / `toMs` | same | int64 epoch ms | Bound the CLOSE time, half-open `[fromMs, toMs)`. Unparseable reads as "not supplied" |
 | `activate` | `POST /app/panels` | bool, default `false` | Surface the terminal window after the add — the "see the move → open the book" gesture |
 | `side` | place order | `BUY` \| `SELL` (case-insensitive) | |
 | `type` | place order | `Limit` \| `Market` (case-insensitive) | `price` required for Limit, forbidden for Market; trigger types are a documented follow-up |

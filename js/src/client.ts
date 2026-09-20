@@ -17,6 +17,28 @@ import type {
   PlaceableContent,
   SlotAction,
   SlotLookup,
+  AddSlotsBody,
+  ChartWindow,
+  ChartWindowAction,
+  ChartWindowKind,
+  ChartWindowRemoved,
+  ClosedTradeDetail,
+  ClosedTradesPage,
+  CreateTabBody,
+  OpenChartWindowBody,
+  SettableContent,
+  SlotChanged,
+  SlotRemoved,
+  SlotsAdded,
+  TabAction,
+  TabLookup,
+  TabRemoved,
+  UpdateChartWindowBody,
+  UpdateTabBody,
+  WindowAction,
+  WindowSummary,
+  WorkspaceSlotLookup,
+  WorkspaceWindow,
   Ping,
   PlaceOrder,
   Position,
@@ -52,6 +74,16 @@ export class ColibriError extends Error {
 }
 
 const enc = encodeURIComponent;
+
+/**
+ * Re-emit a content object with `kind` FIRST. The terminal resolves a write content union by a
+ * discriminator it expects to read before anything else, and a content that leads with another key
+ * fails the parse rather than answering a 400 — so the order is part of the contract, not style.
+ */
+const kindFirst = <T extends { kind: string }>(content: T): T => {
+  const { kind, ...rest } = content;
+  return { kind, ...rest } as T;
+};
 
 /**
  * REST client for the Colibri Local API. Reads need no credential at all; **trading** needs the
@@ -162,6 +194,34 @@ export class ColibriClient {
     return this.req<{ balances: Balance[] }>("GET", `/connections/${enc(connectionId)}/balances`).then((r) => r.balances);
   }
 
+  /**
+   * GET /connections/{id}/trades — CLOSED-trade history, newest close first. `fromMs`/`toMs` bound
+   * the CLOSE time and are half-open `[fromMs, toMs)`; a value the terminal cannot parse reads as
+   * "not supplied" rather than erroring. `pageSize` is 1–500 (default 100). A row is AMENDABLE
+   * after it is written, so a poller should re-read rather than cache.
+   */
+  listTrades(
+    connectionId: string,
+    opts: { page?: number; pageSize?: number; symbol?: string; fromMs?: number; toMs?: number } = {},
+  ): Promise<ClosedTradesPage> {
+    const q = new URLSearchParams();
+    if (opts.page != null) q.set("page", String(opts.page));
+    if (opts.pageSize != null) q.set("pageSize", String(opts.pageSize));
+    if (opts.symbol) q.set("symbol", opts.symbol);
+    if (opts.fromMs != null) q.set("fromMs", String(opts.fromMs));
+    if (opts.toMs != null) q.set("toMs", String(opts.toMs));
+    const qs = q.toString();
+    return this.req("GET", `/connections/${enc(connectionId)}/trades${qs ? "?" + qs : ""}`);
+  }
+  /**
+   * GET /connections/{id}/trades/{tradeId} — one closed trade WITH its individual fills, oldest
+   * first. A trade that does not exist, belongs to another connection, or is hidden by the
+   * phantom-spot-short rule all answer the same 404.
+   */
+  getTrade(connectionId: string, tradeId: number): Promise<ClosedTradeDetail> {
+    return this.req("GET", `/connections/${enc(connectionId)}/trades/${tradeId}`);
+  }
+
   // ── trading (per-connection grant required) ──────────────────────────────
   /**
    * POST /connections/{id}/orders → 202 {clientOrderId, status}. The venue derives from the
@@ -269,6 +329,137 @@ export class ColibriClient {
   /** Remove the slot entirely (its paired chart goes with it). */
   removePanel(slotId: string): Promise<SlotAction> {
     return this.req("DELETE", `/app/panels/${enc(slotId)}`);
+  }
+
+  // ── workspace (supersedes panel control; carries no api-version) ─────────
+  // The terminal's WINDOWS, the TABS inside a window, the durable BOXES docked in a tab's layout
+  // tree, and the CHART WINDOWS floating beside them. A tab's `layout` is the very tree the panel
+  // surface serves, so the node and content types are shared.
+  //
+  // One wire rule: `kind` must be the FIRST key of a content object — the terminal resolves the
+  // write union by a discriminator it reads first. These methods pin it; a hand-built body must.
+
+  /** GET /app/workspace — every window with its tabs, layouts and chart windows. Scope with `windowId` / `tabId`. */
+  getWorkspace(opts: { windowId?: string; tabId?: string } = {}): Promise<WorkspaceWindow[]> {
+    const q = new URLSearchParams();
+    if (opts.windowId) q.set("windowId", opts.windowId);
+    if (opts.tabId) q.set("tabId", opts.tabId);
+    const qs = q.toString();
+    return this.req<{ windows: WorkspaceWindow[] }>("GET", `/app/workspace${qs ? "?" + qs : ""}`).then((r) => r.windows);
+  }
+
+  /** GET /app/windows — the windows without any tab payload (`tabCount` instead of the tabs). */
+  listWindows(): Promise<WindowSummary[]> {
+    return this.req<{ windows: WindowSummary[] }>("GET", "/app/windows").then((r) => r.windows);
+  }
+
+  /** PATCH /app/windows/{windowId} — raise a window to the front. Only `{active: true}` is meaningful. */
+  activateWindow(windowId: string): Promise<WindowAction> {
+    return this.req("PATCH", `/app/windows/${enc(windowId)}`, { active: true });
+  }
+
+  /**
+   * POST /app/tabs → 201. Omit `windowId` for the main window, `title` for the automatic coin +
+   * count label, `index` to append. The new tab has no `layout` until something is added to it;
+   * `activate` surfaces it (default false so a background tool never steals focus).
+   */
+  createTab(body: CreateTabBody = {}): Promise<TabAction> {
+    return this.req("POST", "/app/tabs", body);
+  }
+
+  /** GET /app/tabs/{tabId} — the tab, byte-identical to its node in the workspace, plus where it sits. */
+  getTab(tabId: string): Promise<TabLookup> {
+    return this.req("GET", `/app/tabs/${enc(tabId)}`);
+  }
+
+  /**
+   * PATCH /app/tabs/{tabId} — rename, reorder and/or activate in one call (applied title → index →
+   * active). `title` is tri-state: a string renames, `null` CLEARS back to the automatic label, and
+   * OMITTING the key leaves the name alone. The terminal reads the key rather than the value, so
+   * never pass a title you read back from {@link getTab} — that freezes a rendered label such as
+   * `"BTC (3)"` as a permanent custom name.
+   */
+  updateTab(tabId: string, patch: UpdateTabBody): Promise<TabAction> {
+    return this.req("PATCH", `/app/tabs/${enc(tabId)}`, patch);
+  }
+
+  /**
+   * DELETE /app/tabs/{tabId} — its slots, feeds and floating chart windows close with it. Closing
+   * the last tab of a BOOK window closes the window; closing the last tab of the MAIN window is
+   * refused (409 `last_tab`).
+   */
+  closeTab(tabId: string): Promise<TabRemoved> {
+    return this.req("DELETE", `/app/tabs/${enc(tabId)}`);
+  }
+
+  /**
+   * POST /app/slots → 201. ADDS boxes — `target` names an ANCHOR that survives with its id, its
+   * content and its live feed; it is never replaced. `target` is `{slot, side}` or `{edge}`, never
+   * both (default `{edge: "right"}`); `stack` is how the new boxes arrange among THEMSELVES.
+   * `share` lives on each {@link NewSlot}, not inside its content.
+   */
+  addSlots(body: AddSlotsBody): Promise<SlotsAdded> {
+    const slots = body.slots.map((s) => ({ ...s, content: kindFirst(s.content) }));
+    return this.req("POST", "/app/slots", { ...body, slots });
+  }
+
+  /** GET /app/slots/{slotId} — the box and where it sits (window, tab, the index chain, its parent split). */
+  getSlot(slotId: string): Promise<WorkspaceSlotLookup> {
+    return this.req("GET", `/app/slots/${enc(slotId)}`);
+  }
+
+  /**
+   * PUT /app/slots/{slotId} — declare what THIS box holds. Idempotent, a kind transition is legal,
+   * and the slot id never changes. `content` is REQUIRED here, unlike the deprecated
+   * {@link setPanel} where omitting it cleared the box — use {@link clearSlot} for that. Every set
+   * on a WIDGET box is refused (409), a clear included.
+   */
+  setSlot(slotId: string, content: SettableContent): Promise<SlotChanged> {
+    return this.req("PUT", `/app/slots/${enc(slotId)}`, { content: kindFirst(content) });
+  }
+
+  /** Clear the box — it stays on screen and keeps its id and its position. */
+  clearSlot(slotId: string): Promise<SlotChanged> {
+    return this.setSlot(slotId, { kind: "empty" });
+  }
+
+  /** DELETE /app/slots/{slotId} — structural: the box is gone and its id retired. A chart paired under an orderbook goes with it. */
+  removeSlot(slotId: string): Promise<SlotRemoved> {
+    return this.req("DELETE", `/app/slots/${enc(slotId)}`);
+  }
+
+  /** GET /app/chart-windows — the floating chart windows, each carrying the `tabId` that owns it. */
+  listChartWindows(opts: { tabId?: string; kind?: ChartWindowKind } = {}): Promise<ChartWindow[]> {
+    const q = new URLSearchParams();
+    if (opts.tabId) q.set("tabId", opts.tabId);
+    if (opts.kind) q.set("kind", opts.kind);
+    const qs = q.toString();
+    return this.req<{ chartWindows: ChartWindow[] }>("GET", `/app/chart-windows${qs ? "?" + qs : ""}`).then(
+      (r) => r.chartWindows,
+    );
+  }
+
+  /**
+   * POST /app/chart-windows → **200 or 201**. 201 opened a window; 200 means that `(kind, exchange,
+   * symbol)` was already open and the live window was re-homed and shown — not an error, and not a
+   * new window. `interval` is `chart` only, `intervals` (exactly 3) `comboChart` only.
+   */
+  openChartWindow(body: OpenChartWindowBody): Promise<ChartWindowAction> {
+    return this.req("POST", "/app/chart-windows", body);
+  }
+
+  /**
+   * PATCH /app/chart-windows/{chartWindowId} — retarget, re-interval, re-home, pin, lock or raise.
+   * `sync` is exclusive across combo windows and the answer reports only THIS window, so re-read
+   * {@link listChartWindows} to see what it turned off.
+   */
+  updateChartWindow(chartWindowId: string, patch: UpdateChartWindowBody): Promise<ChartWindowAction> {
+    return this.req("PATCH", `/app/chart-windows/${enc(chartWindowId)}`, patch);
+  }
+
+  /** DELETE /app/chart-windows/{chartWindowId} — close it. */
+  closeChartWindow(chartWindowId: string): Promise<ChartWindowRemoved> {
+    return this.req("DELETE", `/app/chart-windows/${enc(chartWindowId)}`);
   }
 
   // ── notifications & signals ──────────────────────────────────────────────
