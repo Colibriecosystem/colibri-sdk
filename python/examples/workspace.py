@@ -5,7 +5,14 @@ deprecated); this surface carries no api-version, because every route in it is n
 Everything created here is torn down at the end, so it is safe to run against a live terminal.
 Run:  python examples/workspace.py
 """
+import sys
+
 from colibri import ColibriClient
+
+# A Windows console is cp1252 by default, and a venue's symbol is arbitrary text — HyperliquidSpot
+# alone lists names this codec cannot encode. Without this, printing the workspace raises
+# UnicodeEncodeError on the data rather than on anything this example did.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 EXCHANGE = "BinanceSpot"
 client = ColibriClient.discover()
@@ -49,7 +56,7 @@ for w in client.get_workspace():
         if t.get("layout"):
             show(t["layout"])
         for cw in t["windows"]:
-            print(f"      ↗ {line(cw)}")
+            print(f"      -> {line(cw)}")
 
 # ── build a tab, fill it, take it apart ──────────────────────────────────────
 # POST /app/tabs -> 201. No layout yet — it is an empty tab until something is added.
@@ -59,13 +66,17 @@ print(f"\ncreated tab {tab_id} at index {made['tab']['index']} of window {made['
 
 # POST /app/slots -> 201. An ordered stack: an orderbook with its chart under it, 70/30. "share"
 # sits on the SLOT, not inside the content — one written inside a content is silently dropped.
+#
+# target is omitted, which the contract defines as {"edge": "right"}. Say that explicitly and
+# terminal 1.0.0 answers 404 unknown_slot — the edge half of the union is refused on every value
+# there, so the default is reachable only by leaving the field out. {"slot": ..., "side": ...}
+# works, and is what you want anyway once there is a box to anchor to.
 added = client.add_slots(
     [
         {"share": 0.7, "content": {"kind": "orderbook", "exchange": EXCHANGE, "symbol": "BTCUSDT"}},
         {"share": 0.3, "content": {"kind": "chart", "exchange": EXCHANGE, "symbol": "BTCUSDT", "interval": "M5"}},
     ],
     tab_id=tab_id,
-    target={"edge": "right"},
     stack="column",
 )
 print("added: " + " | ".join(f"{s['id'][:8]} {describe(s['content'])}" for s in added["slots"]))
@@ -74,6 +85,12 @@ print("added: " + " | ".join(f"{s['id'][:8]} {describe(s['content'])}" for s in 
 book = added["slots"][0]
 where = client.get_slot(book["id"])["position"]
 print(f"position: tab {where['tabId']} path {where['path']} parent {where.get('parent', '(root)')}")
+
+# DELETE /app/slots/{id} — structural: the box is gone and its id retired. Do the paired chart
+# NOW, while it is still its own box: it is docked under the orderbook, so it goes WITH it the
+# moment that box changes kind or is cleared, and a later remove would 404 on something already gone.
+client.remove_slot(added["slots"][1]["id"])
+print("removed the paired chart — the orderbook is alone in the tab now")
 
 # PUT /app/slots/{id} — idempotent set. The instrument changes; the SLOT ID DOES NOT.
 changed = client.set_slot(book["id"], {"kind": "orderbook", "exchange": EXCHANGE, "symbol": "ETHUSDT"})
@@ -110,11 +127,7 @@ print(f"this tab owns {len(client.list_chart_windows(tab_id=tab_id))} chart wind
 
 # ── tear down ────────────────────────────────────────────────────────────────
 client.close_chart_window(opened["chartWindow"]["id"])
-# Removing a box is structural — a chart paired under an orderbook goes WITH it, so remove the
-# stack back to front; the other order would 404 on a box that is already gone.
-for s in reversed(added["slots"]):
-    client.remove_slot(s["id"])
-# Closing the tab would take its slots and chart windows with it anyway.
+# Closing the tab takes whatever it still holds — the cleared box here — with it.
 client.close_tab(tab_id)
 print("\ntorn down")
 
