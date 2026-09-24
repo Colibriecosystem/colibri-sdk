@@ -716,9 +716,10 @@ export interface ClosedTrade {
   openPrice: string;
   closePrice: string;
   quantity: string;
+  /** Round-trip turnover in quote — the entry leg plus the exit leg (`quantity` × `openPrice` + `quantity` × `closePrice`). */
   volumeUsd: string;
   netPnl: string;
-  /** RECOMPUTED from `netPnl` + `commission` over `volumeUsd` — rows written before the fix stored a percent with commission already folded in. */
+  /** RECOMPUTED from `netPnl` + `commission` over the entry notional (`quantity` × `openPrice`), not over the two-leg `volumeUsd` — rows written before the fix stored a percent with commission already folded in. */
   pnlPercent: string;
   commission: string;
   funding: string;
