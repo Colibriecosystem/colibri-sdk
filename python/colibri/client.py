@@ -195,7 +195,9 @@ class ColibriClient:
         cannot parse reads as "not supplied" rather than erroring. page is 1-based, page_size 1-500
         (default 100). A row is AMENDABLE after it is written, so re-read rather than cache.
         Answers {"connectionId", "trades": [...], "page", "pageSize", "totalCount", "totalPages"};
-        every money and size field on a trade is a decimal STRING.
+        every money and size field on a trade is a decimal STRING. volumeUsd is the round-trip
+        turnover in quote (entry leg plus exit leg); pnlPercent is recomputed over the entry
+        notional (quantity × openPrice), not over volumeUsd.
         """
         return self._req(
             "GET",

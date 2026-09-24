@@ -431,7 +431,9 @@ public sealed record SlotTarget
 /// <summary>
 ///     One CLOSED position — a history row, not a live tape print. <c>Side</c> ∈ <c>Long</c> |
 ///     <c>Short</c>; every money and size field is a decimal STRING. A row is AMENDABLE after it is
-///     written, so a poller should re-read rather than cache.
+///     written, so a poller should re-read rather than cache. <c>VolumeUsd</c> is the round-trip
+///     turnover in quote, entry leg plus exit leg; <c>PnlPercent</c> is recomputed over the entry
+///     notional (<c>Quantity</c> × <c>OpenPrice</c>), not over <c>VolumeUsd</c>.
 /// </summary>
 public sealed record ClosedTrade(
     long Id,
