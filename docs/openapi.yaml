@@ -3350,12 +3350,15 @@ components:
         openPrice: { type: string }
         closePrice: { type: string }
         quantity: { type: string }
-        volumeUsd: { type: string }
+        volumeUsd:
+          type: string
+          description: Round-trip turnover in quote — the entry leg plus the exit leg (qty × open + qty × close).
         netPnl: { type: string }
         pnlPercent:
           type: string
           description: >-
-            RECOMPUTED from netPnl + commission over volumeUsd rather than served from storage — rows
+            RECOMPUTED from netPnl + commission over the entry notional (quantity × openPrice; volumeUsd
+            is the two-leg turnover, entry + exit) rather than served from storage — rows
             written before the fix stored a percent with commission already folded in, which is why
             the in-app grid ignores the stored value too.
         commission: { type: string }
