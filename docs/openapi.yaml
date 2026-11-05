@@ -708,13 +708,16 @@ paths:
       tags: [Connections]
       summary: Closed-trade history, newest close first
       description: >-
-        The terminal's OWN record of this account's closed trades — it exists nowhere else, which is
-        why this read is account data rather than market data. `fromMs`/`toMs` bound the CLOSE time
-        and are half-open `[fromMs, toMs)`, so consecutive windows tile without double-counting the
-        row on the seam; an unparseable value reads as "not supplied" rather than erroring. A row is
-        AMENDABLE after it is written — it is inserted at close with locally computed numbers and
-        later overwritten with venue-authoritative ones — so a poller should re-read rather than
-        cache forever.
+        This account's closed trades as the EXCHANGE records them — the terminal's venue book (the
+        Trades window's "Новое"), loaded from the venue into a local cache and read from there. The
+        read is account data rather than market data. `sync` carries the loader's status for this
+        connection (null when it has not looked at it this session); the GET itself never asks the
+        venue — `POST /connections/{id}/trades/sync` does. `fromMs`/`toMs` bound the CLOSE time and
+        are half-open `[fromMs, toMs)`, so consecutive windows tile without double-counting the row
+        on the seam; an unparseable value reads as "not supplied" rather than erroring. Row `id`s
+        are NOT stable across loads (the cache is reset when a connection's account changes and a
+        rebuild drops stale rows): key on `venueKey` and compare `updatedAtMs`. A storage failure
+        answers `500 internal`, never an empty page.
       parameters:
         - $ref: "#/components/parameters/connectionIdPath"
         - name: page
@@ -747,6 +750,53 @@ paths:
                 $ref: "#/components/schemas/TradesResponse"
         "404":
           $ref: "#/components/responses/UnknownConnection"
+        "500":
+          description: The venue book could not be read (code `internal`) — never an empty page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /connections/{id}/trades/sync:
+    post:
+      operationId: syncTrades
+      tags: [Connections]
+      summary: Ask the venue for this connection's recent history (≤ 30 days)
+      description: >-
+        The one thing the GETs never do. Queues a load of this connection alone for `[fromMs, toMs)`,
+        clamped to the last 30 days (`fromMs` older than that is raised to the 30-day floor; `toMs`
+        after now is cut to now; a window that inverts collapses to its start) and answers `202` at
+        once with the period actually queued. Progress rides `TradesResponse.sync` — poll the list
+        and read it; the status appears as `Queued` once the run starts. Merged with any load in
+        flight (the union of the periods), paced like a window's request; never forced — what the
+        cache already covers is not read again. No request body.
+      parameters:
+        - $ref: "#/components/parameters/connectionIdPath"
+        - name: fromMs
+          in: query
+          required: false
+          description: Period start (Unix ms); default and floor = now − 30 days.
+          schema: { type: integer, format: int64 }
+        - name: toMs
+          in: query
+          required: false
+          description: Period end (Unix ms); default and ceiling = now.
+          schema: { type: integer, format: int64 }
+      responses:
+        "202":
+          description: Queued; the period after the clamp.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TradesSyncAccepted"
+        "404":
+          $ref: "#/components/responses/UnknownConnection"
+        "500":
+          description: The venue-history loader (or the connections store) is not wired in this build (code `internal`) — nothing was queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /connections/{id}/trades/{tradeId}:
     get:
@@ -757,13 +807,23 @@ paths:
         Fills live in their own table and only this surface wants them, so the list read never pays
         for them. A trade that does not exist, belongs to ANOTHER connection, or is hidden by the
         phantom-spot-short display rule all answer the same `404` — distinguishing them would report
-        what exists outside this connection.
+        what exists outside this connection. `fills=cache` (the default) reads the cached executions;
+        `fills=fetch` asks the loader, which fetches them from the venue when the cache has none —
+        only after the ownership checks above passed. A fetch the venue did not answer still returns
+        the trade (`200`) with `fills: []`, `fillsComplete: false` and `fillsOutcome` saying why.
       parameters:
         - $ref: "#/components/parameters/connectionIdPath"
         - name: tradeId
           in: path
           required: true
           schema: { type: integer, format: int64 }
+        - name: fills
+          in: query
+          required: false
+          description: >-
+            `cache` reads what the terminal holds; `fetch` asks the venue for the executions the
+            cache lacks (a paid venue call, paced like a load's). Anything else reads as `cache`.
+          schema: { type: string, enum: [cache, fetch], default: cache }
       responses:
         "200":
           description: The trade and its fills, oldest first.
@@ -773,6 +833,12 @@ paths:
                 $ref: "#/components/schemas/TradeDetailResponse"
         "404":
           description: No such trade on this connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The venue book could not be read (code `internal`).
           content:
             application/json:
               schema:
@@ -2335,6 +2401,19 @@ components:
           type: integer
           description: How many granted accounts the action was dispatched to.
 
+    TradesSyncAccepted:
+      type: object
+      additionalProperties: false
+      description: "`POST /connections/{id}/trades/sync` accepted: the period actually queued, after the 30-day clamp."
+      required: [status, connectionId, fromMs, toMs]
+      properties:
+        status:
+          type: string
+          description: Always `accepted`.
+        connectionId: { type: string }
+        fromMs: { type: integer, format: int64 }
+        toMs: { type: integer, format: int64 }
+
 
     LayoutNode:
       description: >-
@@ -3341,9 +3420,18 @@ components:
     Trade:
       type: object
       additionalProperties: false
-      required: [id, exchange, symbol, side, openPrice, closePrice, quantity, volumeUsd, netPnl, pnlPercent, commission, funding, openTimeMs, closeTimeMs]
+      description: >-
+        One closed round trip as the exchange records it (the venue book). Money is quote-currency
+        decimal strings, times Unix ms.
+      required: [id, exchange, symbol, side, openPrice, closePrice, quantity, volumeUsd, netPnl, pnlPercent, commission, funding, openTimeMs, closeTimeMs, liquidationFee, venueKey, updatedAtMs]
       properties:
-        id: { type: integer, format: int64 }
+        id:
+          type: integer
+          format: int64
+          description: >-
+            The cache row id — NOT stable across loads: the cache is reset when the connection's account
+            changes and a rebuild drops stale rows, so the same round trip may come back under another
+            id. Key on `venueKey`.
         exchange: { type: string }
         symbol: { type: string }
         side: { type: string, enum: [Long, Short] }
@@ -3357,19 +3445,61 @@ components:
         pnlPercent:
           type: string
           description: >-
-            RECOMPUTED from netPnl + commission over the entry notional (quantity × openPrice; volumeUsd
-            is the two-leg turnover, entry + exit) rather than served from storage — rows
-            written before the fix stored a percent with commission already folded in, which is why
-            the in-app grid ignores the stored value too.
+            As STORED by the composer — the price return on the venue's basis (funding out; a record
+            without a size still has one) — exactly what the Trades window's exchange book shows.
         commission: { type: string }
         funding: { type: string }
         openTimeMs: { type: integer, format: int64 }
         closeTimeMs: { type: integer, format: int64 }
+        liquidationFee:
+          type: string
+          description: The liquidation fee the venue booked apart from `commission`; `"0"` where none.
+        venueKey:
+          type: string
+          description: The venue's own identity of the round trip — the stable key across loads.
+        updatedAtMs:
+          type: [integer, "null"]
+          format: int64
+          description: When the terminal last wrote this row; compare it instead of re-reading every row.
+
+    TradeSyncState:
+      type: string
+      description: Where a connection's load stands (the loader's `VenueHistoryState`).
+      enum:
+        - Queued
+        - Running
+        - Done
+        - Partial
+        - Unsupported
+        - KeyRejected
+        - RateLimited
+        - Failed
+
+    TradeSync:
+      type: object
+      additionalProperties: false
+      description: The loader's status for one connection — what the Trades window's chip shows.
+      required: [state, doneSteps, totalSteps, retryAtMs, historyFromMs, detail]
+      properties:
+        state: { $ref: "#/components/schemas/TradeSyncState" }
+        doneSteps: { type: integer, description: Requests finished in this run. }
+        totalSteps: { type: integer, description: Requests planned for this run. }
+        retryAtMs:
+          type: [integer, "null"]
+          format: int64
+          description: Rate-limited — the local time the next attempt may go out.
+        historyFromMs:
+          type: [integer, "null"]
+          format: int64
+          description: The venue serves nothing older than this (its retention); null when no limit was hit.
+        detail:
+          type: [string, "null"]
+          description: A short, credential-free reason.
 
     TradesResponse:
       type: object
       additionalProperties: false
-      required: [connectionId, trades, page, pageSize, totalCount, totalPages]
+      required: [connectionId, trades, page, pageSize, totalCount, totalPages, sync]
       properties:
         connectionId: { type: string }
         trades:
@@ -3379,11 +3509,16 @@ components:
         pageSize: { type: integer }
         totalCount: { type: integer }
         totalPages: { type: integer }
+        sync:
+          description: The loader's status for this connection; null when it has not looked at it this session.
+          oneOf:
+            - $ref: "#/components/schemas/TradeSync"
+            - type: "null"
 
     TradeFill:
       type: object
       additionalProperties: false
-      required: [price, quantity, quoteQuantity, commission, isBuyer, timeMs, venueTradeId]
+      required: [price, quantity, quoteQuantity, commission, isBuyer, timeMs, venueTradeId, isOpening]
       properties:
         price: { type: string }
         quantity: { type: string }
@@ -3392,15 +3527,25 @@ components:
         isBuyer: { type: boolean }
         timeMs: { type: integer, format: int64 }
         venueTradeId: { type: string }
+        isOpening:
+          type: [boolean, "null"]
+          description: This execution opened (or added to) the position rather than reduced it; null where the venue did not say.
 
     TradeDetailResponse:
       type: object
       additionalProperties: false
-      required: [connectionId, trade, fills]
+      required: [connectionId, trade, fills, fillsComplete, fillsOutcome]
       properties:
         connectionId: { type: string }
         trade: { $ref: "#/components/schemas/Trade" }
         fills:
           type: array
           items: { $ref: "#/components/schemas/TradeFill" }
+        fillsComplete:
+          type: boolean
+          description: The cache holds this row's executions (it caches them only when provably whole).
+        fillsOutcome:
+          type: [string, "null"]
+          enum: [unsupported, failed, rateLimited, authRejected, null]
+          description: Null unless `fills=fetch` asked the venue and it did not answer — then why.
 
