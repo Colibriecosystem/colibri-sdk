@@ -704,11 +704,12 @@ export interface UpdateChartWindowBody {
 
 // ── closed trades ────────────────────────────────────────────────────────
 /**
- * One CLOSED position — a history row, not a live tape print (that is {@link TradePush}). Every
- * money and size field is a decimal string; JSON floats lose crypto tick precision. A row is
- * AMENDABLE after it is written, so a poller should re-read rather than cache.
+ * One closed round trip as the EXCHANGE records it (the terminal's venue book) — a history row, not
+ * a live tape print (that is {@link TradePush}). Every money and size field is a decimal string;
+ * JSON floats lose crypto tick precision. Key rows on `venueKey`, not `id`.
  */
 export interface ClosedTrade {
+  /** The cache row id — NOT stable across loads: the cache is reset when the connection's account changes and a rebuild drops stale rows, so the same round trip may come back under another id. Key on `venueKey`. */
   id: number;
   exchange: string;
   symbol: string;
@@ -719,15 +720,47 @@ export interface ClosedTrade {
   /** Round-trip turnover in quote — the entry leg plus the exit leg (`quantity` × `openPrice` + `quantity` × `closePrice`). */
   volumeUsd: string;
   netPnl: string;
-  /** RECOMPUTED from `netPnl` + `commission` over the entry notional (`quantity` × `openPrice`), not over the two-leg `volumeUsd` — rows written before the fix stored a percent with commission already folded in. */
+  /** As STORED by the composer — the price return on the venue's basis (funding out; a record without a size still has one), exactly what the terminal's exchange book shows. */
   pnlPercent: string;
   commission: string;
   funding: string;
   openTimeMs: number;
   closeTimeMs: number;
+  /** The liquidation fee the venue booked apart from `commission`; `"0"` where none. */
+  liquidationFee: string;
+  /** The venue's own identity of the round trip — the stable key across loads. */
+  venueKey: string;
+  /** When the terminal last wrote this row; compare it instead of re-reading every row. */
+  updatedAtMs: number | null;
 }
 
-/** `GET /connections/{id}/trades` — one page, newest CLOSE first. */
+/** Where a connection's venue-history load stands. */
+export type ClosedTradesSyncState =
+  | "Queued"
+  | "Running"
+  | "Done"
+  | "Partial"
+  | "Unsupported"
+  | "KeyRejected"
+  | "RateLimited"
+  | "Failed";
+
+/** The venue-history loader's status for one connection — what the terminal's Trades window shows. */
+export interface ClosedTradesSync {
+  state: ClosedTradesSyncState;
+  /** Requests finished in this run. */
+  doneSteps: number;
+  /** Requests planned for this run. */
+  totalSteps: number;
+  /** Rate-limited — the local time the next attempt may go out. */
+  retryAtMs: number | null;
+  /** The venue serves nothing older than this (its retention); null when no limit was hit. */
+  historyFromMs: number | null;
+  /** A short, credential-free reason. */
+  detail: string | null;
+}
+
+/** `GET /connections/{id}/trades` — one page of the venue book, newest CLOSE first. */
 export interface ClosedTradesPage {
   connectionId: string;
   trades: ClosedTrade[];
@@ -735,6 +768,17 @@ export interface ClosedTradesPage {
   pageSize: number;
   totalCount: number;
   totalPages: number;
+  /** The loader's status for this connection; null when it has not looked at it this session. */
+  sync: ClosedTradesSync | null;
+}
+
+/** `POST /connections/{id}/trades/sync` → 202 — the period actually queued, after the 30-day clamp. */
+export interface ClosedTradesSyncAccepted {
+  /** Always `accepted`. */
+  status: string;
+  connectionId: string;
+  fromMs: number;
+  toMs: number;
 }
 
 /** One venue fill that makes up a closed trade. */
@@ -746,6 +790,8 @@ export interface ClosedTradeFill {
   isBuyer: boolean;
   timeMs: number;
   venueTradeId: string;
+  /** This execution opened (or added to) the position rather than reduced it; null where the venue did not say. */
+  isOpening: boolean | null;
 }
 
 /** `GET /connections/{id}/trades/{tradeId}` — one closed trade with its fills, oldest first. */
@@ -753,6 +799,10 @@ export interface ClosedTradeDetail {
   connectionId: string;
   trade: ClosedTrade;
   fills: ClosedTradeFill[];
+  /** The cache holds this row's executions (it caches them only when provably whole). */
+  fillsComplete: boolean;
+  /** Null unless `fills: "fetch"` asked the venue and it did not answer — then why (and `fills` is empty). */
+  fillsOutcome: "unsupported" | "failed" | "rateLimited" | "authRejected" | null;
 }
 
 /** One venue from GET /exchanges — `id` is the string every `exchange` param accepts. */

@@ -127,8 +127,15 @@ console.log("\ntorn down");
 // Every money and size field is a decimal STRING — parse at the edge, never store the float.
 const [connection] = await client.connections();
 if (connection) {
+  // The list reads the terminal's cache of the venue book and never asks the venue; this does. It
+  // answers 202 at once with the (30-day-clamped) period queued, and the load's progress then rides
+  // `sync` on every list read — null until the loader has looked at the connection.
+  const queued = await client.syncTrades(connection.id);
+  console.log(`\nsync queued: ${new Date(queued.fromMs).toISOString()} → ${new Date(queued.toMs).toISOString()}`);
+
   const page = await client.listTrades(connection.id, { pageSize: 5 });
-  console.log(`\n${connection.id}: ${page.totalCount} closed trade(s), page ${page.page}/${page.totalPages}`);
+  const sync = page.sync ? `${page.sync.state} ${page.sync.doneSteps}/${page.sync.totalSteps}` : "not started";
+  console.log(`${connection.id}: ${page.totalCount} closed trade(s), page ${page.page}/${page.totalPages}, sync ${sync}`);
   for (const t of page.trades) {
     console.log(`  #${t.id} ${t.side} ${t.symbol}  ${t.openPrice} → ${t.closePrice}  net ${t.netPnl} (${t.pnlPercent}%)`);
   }

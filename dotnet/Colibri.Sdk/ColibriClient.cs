@@ -168,11 +168,16 @@ public sealed class ColibriClient : IDisposable
         (await GetAsync<BalanceResponse>($"/connections/{E(connectionId)}/balances", ct).ConfigureAwait(false)).Balances;
 
     /// <summary>
-    ///     GET /connections/{id}/trades — CLOSED-trade history, newest close first.
-    ///     <paramref name="fromMs" /> / <paramref name="toMs" /> bound the CLOSE time and are half-open
-    ///     <c>[fromMs, toMs)</c>; a value the terminal cannot parse reads as "not supplied" rather than
-    ///     erroring. <paramref name="page" /> is 1-based, <paramref name="pageSize" /> 1–500 (default
-    ///     100). A row is AMENDABLE after it is written, so a poller should re-read rather than cache.
+    ///     GET /connections/{id}/trades — CLOSED-trade history as the EXCHANGE records it (the
+    ///     terminal's venue book, loaded from the venue into a local cache and read from there), newest
+    ///     close first. This GET never asks the venue — <see cref="SyncTradesAsync" /> does — and
+    ///     <see cref="ClosedTradesPage.Sync" /> carries the loader's status (null when it has not
+    ///     looked at this connection this session). <paramref name="fromMs" /> / <paramref name="toMs" />
+    ///     bound the CLOSE time and are half-open <c>[fromMs, toMs)</c>; a value the terminal cannot
+    ///     parse reads as "not supplied" rather than erroring. <paramref name="page" /> is 1-based,
+    ///     <paramref name="pageSize" /> 1–500 (default 100). Row ids are NOT stable across loads: key on
+    ///     <see cref="ClosedTrade.VenueKey" /> and compare <see cref="ClosedTrade.UpdatedAtMs" />. A
+    ///     storage failure answers <c>500 internal</c>, never an empty page.
     /// </summary>
     public Task<ClosedTradesPage> ListTradesAsync(
         string connectionId,
@@ -214,12 +219,49 @@ public sealed class ColibriClient : IDisposable
     }
 
     /// <summary>
-    ///     GET /connections/{id}/trades/{tradeId} — one closed trade WITH its individual fills, oldest
-    ///     first. A trade that does not exist, belongs to another connection, or is hidden by the
-    ///     phantom-spot-short rule all answer the same 404.
+    ///     POST /connections/{id}/trades/sync → 202 — the one call that asks the VENUE. Queues a load of
+    ///     this connection alone for <c>[fromMs, toMs)</c>, clamped to the last 30 days: an older
+    ///     <paramref name="fromMs" /> is raised to the 30-day floor, a <paramref name="toMs" /> after now
+    ///     is cut to now, a window that inverts collapses to its start (null = the floor / now). Answers
+    ///     at once with the period actually queued. Progress rides <see cref="ClosedTradesPage.Sync" />
+    ///     — poll <see cref="ListTradesAsync" /> and read it. Merged with any load in flight (the union
+    ///     of the periods); never forced — what the cache already covers is not read again.
     /// </summary>
-    public Task<ClosedTradeDetail> GetTradeAsync(string connectionId, long tradeId, CancellationToken ct = default) =>
-        GetAsync<ClosedTradeDetail>($"/connections/{E(connectionId)}/trades/{tradeId}", ct);
+    public Task<ClosedTradesSyncAccepted> SyncTradesAsync(
+        string connectionId,
+        long? fromMs = null,
+        long? toMs = null,
+        CancellationToken ct = default)
+    {
+        var q = new List<string>(2);
+        if (fromMs is { } f)
+        {
+            q.Add($"fromMs={f}");
+        }
+
+        if (toMs is { } t)
+        {
+            q.Add($"toMs={t}");
+        }
+
+        var qs = q.Count > 0 ? "?" + string.Join("&", q) : "";
+        return SendAsync<ClosedTradesSyncAccepted>(HttpMethod.Post, $"/connections/{E(connectionId)}/trades/sync{qs}", null, ct);
+    }
+
+    /// <summary>
+    ///     GET /connections/{id}/trades/{tradeId} — one closed trade WITH its individual fills, oldest
+    ///     first. <paramref name="tradeId" /> is a row id from a recent list read (ids are not stable
+    ///     across loads). A trade that does not exist, belongs to another connection, or is hidden by
+    ///     the phantom-spot-short rule all answer the same 404. <paramref name="fills" /> <c>cache</c>
+    ///     (null = the default) reads the cached executions; <c>fetch</c> asks the venue for the ones
+    ///     the cache lacks — a paid venue call, paced like a load, made only after the ownership checks
+    ///     pass. A fetch the venue did not answer still returns the trade, with no fills,
+    ///     <see cref="ClosedTradeDetail.FillsComplete" /> false and
+    ///     <see cref="ClosedTradeDetail.FillsOutcome" /> saying why. A venue book that cannot be read
+    ///     answers <c>500 internal</c>.
+    /// </summary>
+    public Task<ClosedTradeDetail> GetTradeAsync(string connectionId, long tradeId, string? fills = null, CancellationToken ct = default) =>
+        GetAsync<ClosedTradeDetail>($"/connections/{E(connectionId)}/trades/{tradeId}{(fills is null ? "" : $"?fills={E(fills)}")}", ct);
 
     // ── trading (per-connection grant required) ──────────────────────────────
     /// <summary>

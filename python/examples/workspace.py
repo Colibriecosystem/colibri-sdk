@@ -136,8 +136,16 @@ print("\ntorn down")
 connections = client.connections()
 if connections:
     cid = connections[0]["id"]
+    # The list reads the terminal's cache of the venue book and never asks the venue; this does. It
+    # answers 202 at once with the (30-day-clamped) period queued, and the load's progress then
+    # rides "sync" on every list read — None until the loader has looked at the connection.
+    queued = client.sync_trades(cid)
+    print(f"\nsync queued: {queued['fromMs']} -> {queued['toMs']} (Unix ms)")
+
     page = client.list_trades(cid, page_size=5)
-    print(f"\n{cid}: {page['totalCount']} closed trade(s), page {page['page']}/{page['totalPages']}")
+    s = page["sync"]
+    sync = f"{s['state']} {s['doneSteps']}/{s['totalSteps']}" if s else "not started"
+    print(f"{cid}: {page['totalCount']} closed trade(s), page {page['page']}/{page['totalPages']}, sync {sync}")
     for t in page["trades"]:
         print(f"  #{t['id']} {t['side']} {t['symbol']}  {t['openPrice']} -> {t['closePrice']}  net {t['netPnl']} ({t['pnlPercent']}%)")
 

@@ -24,6 +24,7 @@ import type {
   ChartWindowRemoved,
   ClosedTradeDetail,
   ClosedTradesPage,
+  ClosedTradesSyncAccepted,
   CreateTabBody,
   OpenChartWindowBody,
   SettableContent,
@@ -195,10 +196,14 @@ export class ColibriClient {
   }
 
   /**
-   * GET /connections/{id}/trades — CLOSED-trade history, newest close first. `fromMs`/`toMs` bound
-   * the CLOSE time and are half-open `[fromMs, toMs)`; a value the terminal cannot parse reads as
-   * "not supplied" rather than erroring. `pageSize` is 1–500 (default 100). A row is AMENDABLE
-   * after it is written, so a poller should re-read rather than cache.
+   * GET /connections/{id}/trades — CLOSED-trade history as the EXCHANGE records it (the terminal's
+   * venue book, loaded from the venue into a local cache and read from there), newest close first.
+   * This GET never asks the venue — {@link syncTrades} does — and `sync` on the page carries the
+   * loader's status (null when it has not looked at this connection this session). `fromMs`/`toMs`
+   * bound the CLOSE time and are half-open `[fromMs, toMs)`; a value the terminal cannot parse
+   * reads as "not supplied" rather than erroring. `pageSize` is 1–500 (default 100). Row `id`s are
+   * NOT stable across loads: key on `venueKey` and compare `updatedAtMs`. A storage failure answers
+   * `500 internal`, never an empty page.
    */
   listTrades(
     connectionId: string,
@@ -214,12 +219,34 @@ export class ColibriClient {
     return this.req("GET", `/connections/${enc(connectionId)}/trades${qs ? "?" + qs : ""}`);
   }
   /**
-   * GET /connections/{id}/trades/{tradeId} — one closed trade WITH its individual fills, oldest
-   * first. A trade that does not exist, belongs to another connection, or is hidden by the
-   * phantom-spot-short rule all answer the same 404.
+   * POST /connections/{id}/trades/sync → 202 — the one call that asks the VENUE. Queues a load of
+   * this connection alone for `[fromMs, toMs)`, clamped to the last 30 days: an older `fromMs` is
+   * raised to the 30-day floor, a `toMs` after now is cut to now, a window that inverts collapses to
+   * its start (omitted = the floor / now). Answers at once with the period actually queued.
+   * Progress rides `sync` on {@link listTrades} — poll it and read it. Merged with any load in
+   * flight (the union of the periods); never forced — what the cache already covers is not read
+   * again.
    */
-  getTrade(connectionId: string, tradeId: number): Promise<ClosedTradeDetail> {
-    return this.req("GET", `/connections/${enc(connectionId)}/trades/${tradeId}`);
+  syncTrades(connectionId: string, opts: { fromMs?: number; toMs?: number } = {}): Promise<ClosedTradesSyncAccepted> {
+    const q = new URLSearchParams();
+    if (opts.fromMs != null) q.set("fromMs", String(opts.fromMs));
+    if (opts.toMs != null) q.set("toMs", String(opts.toMs));
+    const qs = q.toString();
+    return this.req("POST", `/connections/${enc(connectionId)}/trades/sync${qs ? "?" + qs : ""}`);
+  }
+  /**
+   * GET /connections/{id}/trades/{tradeId} — one closed trade WITH its individual fills, oldest
+   * first. `tradeId` is a row id from a recent list read (ids are not stable across loads). A trade
+   * that does not exist, belongs to another connection, or is hidden by the phantom-spot-short rule
+   * all answer the same 404. `fills: "cache"` (the default) reads the cached executions; `"fetch"`
+   * asks the venue for the ones the cache lacks — a paid venue call, paced like a load, made only
+   * after the ownership checks pass. A fetch the venue did not answer still returns the trade, with
+   * `fills: []`, `fillsComplete: false` and `fillsOutcome` saying why. A venue book that cannot be
+   * read answers `500 internal`.
+   */
+  getTrade(connectionId: string, tradeId: number, opts: { fills?: "cache" | "fetch" } = {}): Promise<ClosedTradeDetail> {
+    const qs = opts.fills ? `?fills=${enc(opts.fills)}` : "";
+    return this.req("GET", `/connections/${enc(connectionId)}/trades/${tradeId}${qs}`);
   }
 
   // ── trading (per-connection grant required) ──────────────────────────────

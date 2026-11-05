@@ -98,8 +98,9 @@ request/response shapes live in [`openapi.yaml`](openapi.yaml).
 | DELETE | `/connections/{id}/positions` | close every position + cancel leftovers on the account → `202` |
 | DELETE | `/orders` | cancel every order on EVERY granted account → `202 {status, accounts}` |
 | DELETE | `/positions` | close every position on EVERY granted account → `202 {status, accounts}` |
-| GET | `/connections/{id}/trades` | `?page=` `?pageSize=` `?symbol=` `?fromMs=` `?toMs=` — CLOSED-trade history, newest close first. `fromMs`/`toMs` bound the CLOSE time, half-open `[from, to)` |
-| GET | `/connections/{id}/trades/{tradeId}` | one closed trade WITH its individual venue fills, oldest first |
+| GET | `/connections/{id}/trades` | `?page=` `?pageSize=` `?symbol=` `?fromMs=` `?toMs=` — CLOSED-trade history as the EXCHANGE records it (the venue book, read from the terminal's cache), newest close first, plus `sync` = the loader's status (or `null`). `fromMs`/`toMs` bound the CLOSE time, half-open `[from, to)`. Row `id`s are NOT stable across loads — key on `venueKey` |
+| POST | `/connections/{id}/trades/sync` | `?fromMs=` `?toMs=`, no body → `202 {status, connectionId, fromMs, toMs}` — the one call that asks the venue: queues a load clamped to the last 30 days; progress rides `sync` on the list |
+| GET | `/connections/{id}/trades/{tradeId}` | `?fills=cache\|fetch` — one closed trade WITH its individual venue fills, oldest first, plus `fillsComplete` / `fillsOutcome`. `fetch` asks the venue for missing fills (a paid venue call) |
 | GET | `/app/workspace` | `?windowId=` `?tabId=` — the whole document: windows → tabs → layout tree + the chart windows each tab owns |
 | GET | `/app/windows` | the windows without any tab payload (`tabCount` instead of the tabs) |
 | PATCH | `/app/windows/{windowId}` | `{active: true}` — raise it. Only `true` is meaningful |
@@ -201,6 +202,8 @@ itself (no grant needed — the app picks, not the API).
 | `kind` (chart window) | `/app/chart-windows` | `chart` \| `comboChart` | `interval` is `chart` only; `intervals` (exactly 3) and `sync` are `comboChart` only |
 | `page` / `pageSize` | `GET /connections/{id}/trades` | int ≥ 1 / int 1–500, default 1 / 100 | 1-based paging over closed trades |
 | `fromMs` / `toMs` | same | int64 epoch ms | Bound the CLOSE time, half-open `[fromMs, toMs)`. Unparseable reads as "not supplied" |
+| `fromMs` / `toMs` | `POST /connections/{id}/trades/sync` | int64 epoch ms, default now − 30 days / now | The period to load, clamped to the last 30 days; the `202` echoes the period actually queued |
+| `fills` | `GET /connections/{id}/trades/{tradeId}` | `cache` \| `fetch`, default `cache` | `fetch` asks the venue for the executions the cache lacks (a paid venue call); anything else reads as `cache` |
 | `activate` | `POST /app/panels` | bool, default `false` | Surface the terminal window after the add — the "see the move → open the book" gesture |
 | `side` | place order | `BUY` \| `SELL` (case-insensitive) | |
 | `type` | place order | `Limit` \| `Market` (case-insensitive) | `price` required for Limit, forbidden for Market; trigger types are a documented follow-up |

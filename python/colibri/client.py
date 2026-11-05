@@ -189,15 +189,24 @@ class ColibriClient:
         from_ms: int | None = None,
         to_ms: int | None = None,
     ) -> dict:
-        """GET /connections/{id}/trades — CLOSED-trade history, newest close first.
+        """GET /connections/{id}/trades — CLOSED-trade history as the EXCHANGE records it, newest close first.
 
-        from_ms/to_ms bound the CLOSE time and are half-open [from_ms, to_ms); a value the terminal
-        cannot parse reads as "not supplied" rather than erroring. page is 1-based, page_size 1-500
-        (default 100). A row is AMENDABLE after it is written, so re-read rather than cache.
-        Answers {"connectionId", "trades": [...], "page", "pageSize", "totalCount", "totalPages"};
-        every money and size field on a trade is a decimal STRING. volumeUsd is the round-trip
-        turnover in quote (entry leg plus exit leg); pnlPercent is recomputed over the entry
-        notional (quantity × openPrice), not over volumeUsd.
+        This is the terminal's venue book, loaded from the venue into a local cache and read from
+        there. This GET never asks the venue — :meth:`sync_trades` does. from_ms/to_ms bound the
+        CLOSE time and are half-open [from_ms, to_ms); a value the terminal cannot parse reads as
+        "not supplied" rather than erroring. page is 1-based, page_size 1-500 (default 100). A
+        storage failure answers 500 "internal", never an empty page.
+        Answers {"connectionId", "trades": [...], "page", "pageSize", "totalCount", "totalPages",
+        "sync"}; sync is the loader's status for this connection — {"state", "doneSteps",
+        "totalSteps", "retryAtMs", "historyFromMs", "detail"}, state one of Queued | Running | Done |
+        Partial | Unsupported | KeyRejected | RateLimited | Failed — or None when it has not looked
+        at this connection this session.
+        Every money and size field on a trade is a decimal STRING. A trade's "id" is NOT stable
+        across loads (the cache is reset when the account changes and a rebuild drops stale rows):
+        key on "venueKey" and compare "updatedAtMs" (int or None) instead of re-reading every row.
+        volumeUsd is the round-trip turnover in quote (entry leg plus exit leg); pnlPercent is as
+        STORED by the composer — the price return on the venue's basis (funding out).
+        liquidationFee is booked apart from commission, "0" where none.
         """
         return self._req(
             "GET",
@@ -205,14 +214,39 @@ class ColibriClient:
             + self._qs(page=page, pageSize=page_size, symbol=symbol, fromMs=from_ms, toMs=to_ms),
         )
 
-    def get_trade(self, connection_id: str, trade_id: int) -> dict:
+    def sync_trades(self, connection_id: str, from_ms: int | None = None, to_ms: int | None = None) -> dict:
+        """POST /connections/{id}/trades/sync -> 202 — the one call that asks the VENUE.
+
+        Queues a load of this connection alone for [from_ms, to_ms), clamped to the last 30 days:
+        an older from_ms is raised to the 30-day floor, a to_ms after now is cut to now, a window
+        that inverts collapses to its start (None = the floor / now). Answers at once with the
+        period actually queued: {"status": "accepted", "connectionId", "fromMs", "toMs"}. Progress
+        rides "sync" on :meth:`list_trades` — poll it and read it. Merged with any load in flight
+        (the union of the periods); never forced — what the cache already covers is not read again.
+        """
+        return self._req(
+            "POST",
+            f"/connections/{urllib.parse.quote(connection_id)}/trades/sync" + self._qs(fromMs=from_ms, toMs=to_ms),
+        )
+
+    def get_trade(self, connection_id: str, trade_id: int, fills: str | None = None) -> dict:
         """GET /connections/{id}/trades/{tradeId} — one closed trade WITH its fills, oldest first.
 
-        A trade that does not exist, belongs to another connection, or is hidden by the
-        phantom-spot-short rule all answer the same 404. Answers
-        {"connectionId", "trade": {...}, "fills": [...]}.
+        trade_id is a row id from a recent list read (ids are not stable across loads). A trade
+        that does not exist, belongs to another connection, or is hidden by the phantom-spot-short
+        rule all answer the same 404. fills = "cache" (None = the default) reads the cached
+        executions; "fetch" asks the venue for the ones the cache lacks — a paid venue call, paced
+        like a load, made only after the ownership checks pass. A venue book that cannot be read
+        answers 500 "internal". Answers {"connectionId", "trade": {...}, "fills": [...],
+        "fillsComplete", "fillsOutcome"}: fillsComplete is True when the cache holds this row's
+        executions (it caches them only when provably whole); fillsOutcome is None unless
+        fills="fetch" asked the venue and it did not answer — then "unsupported" | "failed" |
+        "rateLimited" | "authRejected", with "fills" empty. Each fill carries "isOpening": True when
+        it opened (or added to) the position, None where the venue did not say.
         """
-        return self._req("GET", f"/connections/{urllib.parse.quote(connection_id)}/trades/{trade_id}")
+        return self._req(
+            "GET", f"/connections/{urllib.parse.quote(connection_id)}/trades/{trade_id}" + self._qs(fills=fills)
+        )
 
     # ── trading (per-connection grant required) ──────────────────────────────
     def place_order(

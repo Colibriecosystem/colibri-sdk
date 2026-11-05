@@ -429,11 +429,16 @@ public sealed record SlotTarget
 // ── closed trades ───────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
-///     One CLOSED position — a history row, not a live tape print. <c>Side</c> ∈ <c>Long</c> |
-///     <c>Short</c>; every money and size field is a decimal STRING. A row is AMENDABLE after it is
-///     written, so a poller should re-read rather than cache. <c>VolumeUsd</c> is the round-trip
-///     turnover in quote, entry leg plus exit leg; <c>PnlPercent</c> is recomputed over the entry
-///     notional (<c>Quantity</c> × <c>OpenPrice</c>), not over <c>VolumeUsd</c>.
+///     One closed round trip as the EXCHANGE records it (the terminal's venue book) — a history row,
+///     not a live tape print. <c>Side</c> ∈ <c>Long</c> | <c>Short</c>; every money and size field is
+///     a decimal STRING. <c>Id</c> is the cache row id and is NOT stable across loads — the cache is
+///     reset when the connection's account changes and a rebuild drops stale rows, so the same round
+///     trip may come back under another id: key on <c>VenueKey</c>, the venue's own identity of the
+///     round trip, and compare <c>UpdatedAtMs</c> (when the terminal last wrote the row) instead of
+///     re-reading every row. <c>VolumeUsd</c> is the round-trip turnover in quote, entry leg plus exit
+///     leg; <c>PnlPercent</c> is as STORED by the composer — the price return on the venue's basis
+///     (funding out). <c>LiquidationFee</c> is what the venue booked apart from <c>Commission</c>,
+///     <c>"0"</c> where none.
 /// </summary>
 public sealed record ClosedTrade(
     long Id,
@@ -449,18 +454,52 @@ public sealed record ClosedTrade(
     string Commission,
     string Funding,
     long OpenTimeMs,
-    long CloseTimeMs);
+    long CloseTimeMs,
+    string LiquidationFee,
+    string VenueKey,
+    long? UpdatedAtMs);
 
-/// <summary><c>GET /connections/{id}/trades</c> — one page of history, newest CLOSE first.</summary>
+/// <summary>
+///     The venue-history loader's status for one connection — what the terminal's Trades window
+///     shows. <c>State</c> ∈ <c>Queued</c> | <c>Running</c> | <c>Done</c> | <c>Partial</c> |
+///     <c>Unsupported</c> | <c>KeyRejected</c> | <c>RateLimited</c> | <c>Failed</c>.
+///     <c>DoneSteps</c> / <c>TotalSteps</c> are the requests finished / planned in this run;
+///     <c>RetryAtMs</c> is, when rate-limited, the local time the next attempt may go out;
+///     <c>HistoryFromMs</c> is the venue's retention floor — it serves nothing older — null when no
+///     limit was hit; <c>Detail</c> is a short, credential-free reason.
+/// </summary>
+public sealed record ClosedTradesSync(
+    string State,
+    int DoneSteps,
+    int TotalSteps,
+    long? RetryAtMs,
+    long? HistoryFromMs,
+    string? Detail);
+
+/// <summary>
+///     <c>GET /connections/{id}/trades</c> — one page of the venue book, newest CLOSE first.
+///     <c>Sync</c> is the loader's status for this connection, null when it has not looked at it this
+///     session.
+/// </summary>
 public sealed record ClosedTradesPage(
     string ConnectionId,
     IReadOnlyList<ClosedTrade> Trades,
     int Page,
     int PageSize,
     int TotalCount,
-    int TotalPages);
+    int TotalPages,
+    ClosedTradesSync? Sync);
 
-/// <summary>One venue fill that makes up a closed trade.</summary>
+/// <summary>
+///     <c>POST /connections/{id}/trades/sync</c> → 202 — the period actually queued, after the 30-day
+///     clamp. <c>Status</c> is always <c>accepted</c>.
+/// </summary>
+public sealed record ClosedTradesSyncAccepted(string Status, string ConnectionId, long FromMs, long ToMs);
+
+/// <summary>
+///     One venue fill that makes up a closed trade. <c>IsOpening</c>: this execution opened (or added
+///     to) the position rather than reduced it; null where the venue did not say.
+/// </summary>
 public sealed record ClosedTradeFill(
     string Price,
     string Quantity,
@@ -468,13 +507,22 @@ public sealed record ClosedTradeFill(
     string Commission,
     bool IsBuyer,
     long TimeMs,
-    string VenueTradeId);
+    string VenueTradeId,
+    bool? IsOpening);
 
-/// <summary><c>GET /connections/{id}/trades/{tradeId}</c> — one closed trade with its fills, oldest first.</summary>
+/// <summary>
+///     <c>GET /connections/{id}/trades/{tradeId}</c> — one closed trade with its fills, oldest first.
+///     <c>FillsComplete</c>: the cache holds this row's executions (it caches them only when provably
+///     whole). <c>FillsOutcome</c> ∈ <c>unsupported</c> | <c>failed</c> | <c>rateLimited</c> |
+///     <c>authRejected</c> — null unless <c>fills=fetch</c> asked the venue and it did not answer,
+///     in which case <c>Fills</c> is empty and this says why.
+/// </summary>
 public sealed record ClosedTradeDetail(
     string ConnectionId,
     ClosedTrade Trade,
-    IReadOnlyList<ClosedTradeFill> Fills);
+    IReadOnlyList<ClosedTradeFill> Fills,
+    bool FillsComplete,
+    string? FillsOutcome);
 
 /// <summary>One venue from <c>GET /exchanges</c> — <c>Id</c> is the string every exchange param accepts.</summary>
 public sealed record ExchangeInfo(string Id, string Name, string MarketType, bool Trading);

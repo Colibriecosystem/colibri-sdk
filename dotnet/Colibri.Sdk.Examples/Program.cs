@@ -121,8 +121,16 @@ static int Count(LayoutNode node) => node switch
 if (connections.Count > 0)
 {
     var id = connections[0].Id;
+
+    // The list reads the terminal's cache of the venue book and never asks the venue; this does. It
+    // answers 202 at once with the (30-day-clamped) period queued, and the load's progress then
+    // rides Sync on every list read — null until the loader has looked at the connection.
+    var queued = await client.SyncTradesAsync(id);
+    Console.WriteLine($"\nsync queued: {DateTimeOffset.FromUnixTimeMilliseconds(queued.FromMs):u} → {DateTimeOffset.FromUnixTimeMilliseconds(queued.ToMs):u}");
+
     var page = await client.ListTradesAsync(id, pageSize: 5);
-    Console.WriteLine($"\n{id}: {page.TotalCount} closed trade(s), page {page.Page}/{page.TotalPages}");
+    var sync = page.Sync is { } s ? $"{s.State} {s.DoneSteps}/{s.TotalSteps}" : "not started";
+    Console.WriteLine($"{id}: {page.TotalCount} closed trade(s), page {page.Page}/{page.TotalPages}, sync {sync}");
     foreach (var t in page.Trades)
     {
         Console.WriteLine($"  #{t.Id} {t.Side} {t.Symbol}  {t.OpenPrice} → {t.ClosePrice}  net {t.NetPnl} ({t.PnlPercent}%)");

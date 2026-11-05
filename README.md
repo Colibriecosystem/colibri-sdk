@@ -73,8 +73,9 @@ var book = await client.BookAsync("BinanceSpot", "BTCUSDT", depth: 10);
 
 Read: `/ping` · `/exchanges` · `/exchanges/{exchange}/symbols` · `/markets/{exchange}/{symbol}/book`
 · `…/clusters` · `…/funding` · `/connections` · `/connections/{id}/positions|orders|balances` ·
-**closed-trade history** (`/connections/{id}/trades`, paged and filterable, plus one trade with its
-individual fills) · orderbook settings (GET/PATCH). Trade (per-connection grant; the venue derives
+**closed-trade history** as the exchange records it (`/connections/{id}/trades`, paged and
+filterable, plus one trade with its individual fills; `POST …/trades/sync` asks the venue for the
+last 30 days) · orderbook settings (GET/PATCH). Trade (per-connection grant; the venue derives
 from the connection): place / cancel / bulk cancel (`/connections/{id}/orders`), close positions
 (`/connections/{id}/positions`), and the all-granted sweeps (`DELETE /orders`,
 `DELETE /positions`). Bridge: open a symbol or combo in the terminal, raise a toast, post a market
@@ -114,7 +115,7 @@ in `dotnet/Colibri.Sdk.Examples`):
 | `account` | connections · positions · orders · balance |
 | `trading` | place · cancel · bulk cancel · all-granted sweeps *(grant-gated; armed via `COLIBRI_ARM=1` / `--arm`)* |
 | `app-and-signals` | open-symbol · combo · notify · signal · signal-levels CRUD + triggered sweep |
-| `workspace` | the workspace surface: read the document → create a tab → add a stack → where am I → set (id stable) → kind transition → clear → the tri-state tab title → a chart window → tear it all down; then the closed-trade history + one trade's fills |
+| `workspace` | the workspace surface: read the document → create a tab → add a stack → where am I → set (id stable) → kind transition → clear → the tri-state tab title → a chart window → tear it all down; then the closed-trade history: a venue sync, one page, one trade's fills |
 | `panels` | *(deprecated)* panel control (api-version 2): layout tree → add → where am I → change (id stable) → kind transition → a positioned stack → clear → remove |
 | `orderbook-stream` / `live-trades` | focused WebSocket streams |
 | `stream-all` | every WS channel at once |
