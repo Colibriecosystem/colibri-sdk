@@ -124,7 +124,7 @@ public sealed record OrderbookSettingsResponse(string Exchange, OrderbookSetting
 // Copy ids in the terminal: the ⧉ control on a panel; right-click a tab header → "Copy tab ID".
 //
 // Polymorphism: the terminal writes the discriminator FIRST, which is what lets System.Text.Json
-// resolve these on net8 without AllowOutOfOrderMetadataProperties. Properties holding a leaf are
+// resolve these without AllowOutOfOrderMetadataProperties. Properties holding a leaf are
 // typed as the BASE (LayoutNode) — the discriminator is only honoured through it.
 
 /// <summary>A layout node — <see cref="SplitNode" /> or <see cref="SlotNode" />; <c>Share</c> is its fraction of its parent, null on the root.</summary>
