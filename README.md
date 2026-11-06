@@ -69,6 +69,9 @@ Console.WriteLine((await client.PingAsync()).Version);
 var book = await client.BookAsync("BinanceSpot", "BTCUSDT", depth: 10);
 ```
 
+Targets **.NET 10** (`net10.0`). 0.4.0 dropped `net8.0`, a breaking change: a `net8.0` or `net9.0`
+project stays on SDK 0.3.0 or moves to .NET 10.
+
 ## What you can do
 
 Read: `/ping` · `/exchanges` · `/exchanges/{exchange}/symbols` · `/markets/{exchange}/{symbol}/book`
