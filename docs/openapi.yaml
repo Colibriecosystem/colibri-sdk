@@ -1447,7 +1447,11 @@ paths:
       summary: Open a combo (the coin across every connection)
       description: >-
         Fan one coin across EVERY connection that lists it — one panel per connection. `target`
-        picks where: a new tab (default) or a new window. Display action — token-gated only.
+        picks where: a new tab (default) or a new window. Display action — token-gated only. The
+        answer names what opened: the tab and window, and every slot the combo filled (each book,
+        and each chart it paired or opened) in fan-out order — the durable slot `id`, venue,
+        coin, connection and link group. Nothing opened (no connection lists the coin, or every one that does is
+        unticked in Settings → Combo book) is a `500`.
       requestBody:
         required: true
         content:
@@ -1460,7 +1464,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AppActionResult"
+                $ref: "#/components/schemas/ComboOpenedResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
 
@@ -1524,6 +1528,106 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  /markets/{exchange}/{symbol}/levels:
+    parameters:
+      - name: exchange
+        in: path
+        required: true
+        description: The venue (an id from `GET /exchanges`). A broker venue lands on the venue whose book it shows.
+        schema:
+          type: string
+      - name: symbol
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listUserLevels
+      tags: [Signal levels]
+      summary: List the user's levels on a coin
+      description: >-
+        The user's own levels on the coin — L markers and K alerts, the same the keys place, shown on
+        every book and chart of the coin and durable across restarts. The API-owned alerts of
+        `/signal-levels` are a different set and are not listed here.
+      responses:
+        "200":
+          description: The levels.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserLevelsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    post:
+      operationId: placeUserLevel
+      tags: [Signal levels]
+      summary: Place an L marker or a K alert
+      description: >-
+        Place one of the user's own levels — exactly what the L / K keys place: the trader sees it, can
+        move or remove it, and it persists. It is placed on the tick of the grid the coin's books draw
+        when that is known; a price under half a tick is refused.
+        Idempotent: an armed level of that kind within half a tick already there answers `200` with
+        status `exists` and adds nothing — the keys' own match, so the API never stacks a second
+        level on one row. A K fires while the coin has a live book or chart, as a K placed with the key
+        does, and only on a crossing after it was placed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceUserLevelBody"
+      responses:
+        "201":
+          description: Placed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserLevelPlacedResponse"
+        "200":
+          description: Already there — nothing added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserLevelPlacedResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+    delete:
+      operationId: removeUserLevels
+      tags: [Signal levels]
+      summary: Remove the user's levels on a coin
+      description: >-
+        Remove the levels of a `kind` at a `price` — matched within half the coin's tick, a K the
+        price just reached (still shown greyed) as well as an armed one — or every one of the user's
+        levels on the coin with `all=true` (the O key). A request naming neither is refused (`400`),
+        never read as "all". The API-owned alerts stay.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [marker, alert]
+        - name: price
+          in: query
+          required: false
+          description: The level's price, a decimal string (matched within half the coin's tick).
+          schema:
+            type: string
+        - name: all
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: How many were removed (0 → nothing matched).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignalLevelRemoved"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /signal-levels:
     get:
@@ -2518,6 +2622,20 @@ components:
         viewOnly:
           type: boolean
           description: true = no trading through this box (no account, or trading disabled on it).
+        link:
+          allOf: [{ $ref: "#/components/schemas/SlotLink" }]
+          description: The link group the book is in — present only when it is in one (a freshly opened book usually is not). Reported on the workspace surface (`/app/workspace`, `/app/tabs`, `/app/slots`, `/app/combos`).
+
+    SlotLink:
+      type: object
+      additionalProperties: false
+      description: >-
+        A book's link group (its link menu): `group` 1…30, or `followActive` — the «A» setting, which
+        follows the active window (`group` is 0 then).
+      required: [group, followActive]
+      properties:
+        group: { type: integer, minimum: 0, maximum: 30 }
+        followActive: { type: boolean }
 
     ChartContent:
       type: object
@@ -2661,6 +2779,12 @@ components:
           description: Every box a stack add created, in request order.
           items:
             $ref: "#/components/schemas/SlotNode"
+        tabId:
+          type: string
+          description: On an add — the tab the boxes went into (the one the request named, or the active one).
+        windowId:
+          type: string
+          description: On an add — the window that tab is in.
 
     PlaceableContent:
       description: >-
@@ -2837,7 +2961,24 @@ components:
       properties:
         status:
           type: string
-          description: "`opened` (combos) / `raised` (notifications, signals)."
+          description: "`raised` (notifications, signals)."
+
+    ComboOpenedResponse:
+      type: object
+      additionalProperties: false
+      description: >-
+        What a combo opened. `tabId` / `windowId` are the durable ids `/app/tabs/{tabId}` and
+        `/app/windows/{windowId}` take; a combo opened with `target: window` gets a freshly made
+        window, durable across a restart once the layout is saved.
+      required: [status, tabId, windowId, slots]
+      properties:
+        status: { type: string, const: opened }
+        tabId: { type: string }
+        windowId: { type: string }
+        slots:
+          type: array
+          description: Every slot the combo filled — each book, and each chart it paired or opened — in fan-out order.
+          items: { $ref: "#/components/schemas/SlotNode" }
 
     NotifyBody:
       type: object
@@ -2955,6 +3096,46 @@ components:
       properties:
         removed:
           type: integer
+
+    UserLevel:
+      type: object
+      additionalProperties: false
+      description: >-
+        One of the user's own levels on a coin — an L marker or a K alert, the same the keys place.
+      required: [kind, price, placedMs, crossed]
+      properties:
+        kind: { type: string, enum: [marker, alert] }
+        price: { type: string, description: A decimal string. }
+        placedMs: { type: integer, format: int64, description: When it was placed (Unix ms). }
+        crossed: { type: boolean, description: A K the price has reached — shown greyed until it expires. }
+
+    UserLevelsResponse:
+      type: object
+      additionalProperties: false
+      required: [levels]
+      properties:
+        levels:
+          type: array
+          items: { $ref: "#/components/schemas/UserLevel" }
+
+    PlaceUserLevelBody:
+      type: object
+      additionalProperties: false
+      required: [kind, price]
+      properties:
+        kind: { type: string, enum: [marker, alert] }
+        price: { type: string, description: A positive decimal string. }
+
+    UserLevelPlacedResponse:
+      type: object
+      additionalProperties: false
+      required: [status, level]
+      properties:
+        status:
+          type: string
+          enum: [placed, exists]
+          description: "`placed` (201) / `exists` (200 — the same level was already there, nothing added)."
+        level: { $ref: "#/components/schemas/UserLevel" }
     # ── the workspace surface ───────────────────────────────────────────────────
     # These REUSE the layout vocabulary the Panels section already defines — LayoutNode, SplitNode,
     # SlotNode, SlotContent and its variants are the same shapes, because the workspace document is
@@ -3303,9 +3484,15 @@ components:
     SlotsAddedResponse:
       type: object
       additionalProperties: false
-      required: [status, slots]
+      required: [status, tabId, windowId, slots]
       properties:
         status: { type: string, const: added }
+        tabId:
+          type: string
+          description: The tab the boxes went into — the one the request named, or the active one.
+        windowId:
+          type: string
+          description: The window that tab is in.
         slots:
           type: array
           items: { $ref: "#/components/schemas/SlotNode" }
